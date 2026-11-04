@@ -1,5 +1,6 @@
 """Convert a generated drum loop with the bundled Python, to catch missing packages
-before an installer ships. Run it with desktop/build's Python:
+before an installer ships. Like in the app, stdin is a pipe that a thread blocks on
+(smoke.js keeps it open). Run it with desktop/build's Python:
 
     build/python/bin/python3 scripts/smoke.py      (Windows: build\\python\\python.exe)
 """
@@ -14,6 +15,7 @@ import numpy as np
 import soundfile as sf
 
 from trackyard import analysis
+from trackyard.editor.server import exit_with_parent
 from trackyard.pipeline import convert
 
 
@@ -36,6 +38,7 @@ def drum_loop(seconds: float = 20.0, bpm: float = 100.0, sr: int = 44100) -> np.
 
 
 def main() -> None:
+    exit_with_parent()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         song = tmp / "Smoke - Loop.wav"

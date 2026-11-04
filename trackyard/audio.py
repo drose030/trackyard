@@ -23,10 +23,14 @@ def ffmpeg() -> str:
 
 
 def decode(path: Path, sr: int = SAMPLE_RATE) -> np.ndarray:
-    """Any ffmpeg-readable file → float32 array of shape (samples, 2)."""
+    """Any ffmpeg-readable file → float32 array of shape (samples, 2).
+
+    stdin stays away from ffmpeg: in the desktop app another thread blocks on it, and on
+    Windows ffmpeg then hangs on the shared pipe."""
     raw = subprocess.run(
-        [ffmpeg(), "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
+        [ffmpeg(), "-nostdin", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
         check=True,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
     ).stdout
     return np.frombuffer(raw, dtype=np.float32).reshape(-1, 2)

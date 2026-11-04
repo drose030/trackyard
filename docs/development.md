@@ -114,7 +114,9 @@ npm run dist        # bundle Python, smoke test, build the installer for this OS
    - no bytecode: the app sets `PYTHONPYCACHEPREFIX` to its data folder;
    - no model weights: the first conversion downloads them into the data folder.
 2. `scripts/smoke.py` converts a generated drum loop with that Python, so a missing
-   package fails the build instead of the installed app.
+   package fails the build instead of the installed app. Its stdin is an open pipe
+   that a thread blocks on, as in the app; on Windows a child process that inherits
+   it hangs.
 3. electron-builder writes `desktop/dist/Trackyard-<version>-arm64.dmg` (macOS, about
    300 MB, about 900 MB installed) or `Trackyard-Setup-<version>.exe` (Windows, a
    per-user installer that needs no admin rights). Both are unsigned; see

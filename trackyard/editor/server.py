@@ -431,17 +431,21 @@ def make_handler(app: App, picker=pick):
     return Handler
 
 
+def exit_with_parent() -> None:
+    """Started by the desktop app: its stdin pipe closes when the app quits or crashes, and
+    this process must not outlive it."""
+    def watch() -> None:
+        sys.stdin.read()
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def serve(folder: Path | None, port: int = 8765, open_browser: bool = True, cache: Path = Path("cache"),
           exit_with_stdin: bool = False) -> None:
     app = App(folder, cache)
     if exit_with_stdin:
-        # Started by the desktop app: its pipe closes when it quits or crashes, and the
-        # server must not outlive it.
-        def watch() -> None:
-            sys.stdin.read()
-            os._exit(0)
-
-        threading.Thread(target=watch, daemon=True).start()
+        exit_with_parent()
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     what = app.song.folder.name if app.song else "Trackyard"
