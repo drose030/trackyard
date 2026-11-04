@@ -42,6 +42,7 @@ function startServer() {
     const args = ["-m", "trackyard.cli", "edit", "--no-browser", "--exit-with-stdin", "--port", "0", "--cache", path.join(data, "analysis")];
     server = spawn(exe, args, {
       cwd: data,
+      windowsHide: true,
       env: { ...cleanEnv(), ...env, PYTHONUNBUFFERED: "1" },
     });
     let out = "";

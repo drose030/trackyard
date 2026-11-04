@@ -11,9 +11,22 @@ permissions:
   contents: write
 
 jobs:
-  mac:
-    runs-on: macos-15  # Apple Silicon
-    timeout-minutes: 60
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15  # Apple Silicon
+            name: mac
+            files: desktop/dist/*.dmg
+          - os: windows-latest
+            name: windows
+            files: desktop/dist/*-Setup-*.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
@@ -33,7 +46,8 @@ jobs:
         working-directory: desktop
         run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
 
-      - name: Build the DMG
+      # bundle, smoke test (converts a generated drum loop), installer
+      - name: Build
         working-directory: desktop
         run: |
           npm ci
@@ -44,14 +58,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "Trackyard $GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" desktop/dist/*.dmg --clobber
+          # Both jobs get here; whichever comes first creates the release.
+          gh release create "$GITHUB_REF_NAME" --title "Trackyard $GITHUB_REF_NAME" --generate-notes 2>/dev/null || true
+          gh release upload "$GITHUB_REF_NAME" ${{ matrix.files }} --clobber
 
       - name: Keep a test build
         if: "!startsWith(github.ref, 'refs/tags/v')"
         uses: actions/upload-artifact@v4
         with:
-          name: trackyard-mac
-          path: desktop/dist/*.dmg
+          name: trackyard-${{ matrix.name }}
+          path: ${{ matrix.files }}
           retention-days: 3

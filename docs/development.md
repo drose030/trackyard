@@ -95,31 +95,37 @@ there. The server quits when the app's pipe to it closes, also after a crash.
 cd desktop
 npm install
 npm start           # runs against the repo's .venv
-npm run dist        # macOS: bundle Python, then build the DMG
+npm run dist        # bundle Python, smoke test, build the installer for this OS
 ```
 
-`npm run dist` runs `scripts/bundle-mac.sh`, which builds `desktop/build/python`: a
-copy of uv's standalone Python 3.11 (python-build-standalone, which can be moved
-anywhere) with Trackyard installed, and only what a conversion imports:
-- librosa and its numba/llvmlite/scikit-learn stack are removed; ADTOF only uses
-  `librosa.load` and `librosa.stft`, and `trackyard/librosa_lite.py` stands in for them
-  (`tests/test_librosa_lite.py` checks they match; on a whole song the ADTOF hits are
-  identical);
-- scipy, sympy, networkx, pip, setuptools, PyTorch's headers, compiler and ONNX
-  export, and Tk are removed. To check a change, list `sys.modules` after a
-  conversion;
-- no bytecode: the app sets `PYTHONPYCACHEPREFIX` to its data folder;
-- no model weights: the first conversion downloads them into the data folder.
+`npm run dist` runs three steps:
+
+1. `scripts/bundle.py` (macOS on Apple Silicon, Windows x64) builds
+   `desktop/build/python`: a copy of uv's standalone Python 3.11
+   (python-build-standalone, which can be moved anywhere) with Trackyard installed,
+   and only what a conversion imports:
+   - librosa and its numba/llvmlite/scikit-learn stack are removed; ADTOF only uses
+     `librosa.load` and `librosa.stft`, and `trackyard/librosa_lite.py` stands in for
+     them (`tests/test_librosa_lite.py` checks they match; on a whole song the ADTOF
+     hits are identical);
+   - scipy, sympy, networkx, pip, setuptools, PyTorch's headers, compiler and ONNX
+     export, and Tk are removed. To check a change, list `sys.modules` after a
+     conversion;
+   - no bytecode: the app sets `PYTHONPYCACHEPREFIX` to its data folder;
+   - no model weights: the first conversion downloads them into the data folder.
+2. `scripts/smoke.py` converts a generated drum loop with that Python, so a missing
+   package fails the build instead of the installed app.
+3. electron-builder writes `desktop/dist/Trackyard-<version>-arm64.dmg` (macOS, about
+   300 MB, about 900 MB installed) or `Trackyard-Setup-<version>.exe` (Windows, a
+   per-user installer that needs no admin rights). Both are unsigned; see
+   [plan.md](plan.md) for signing.
 
 ffmpeg comes from the `imageio-ffmpeg` package when there's none on the `PATH`.
-The DMG is about 300 MB, the installed app about 900 MB.
 
-**Releases:** `.github/workflows/desktop.yml` builds the DMG on GitHub. Pushing a tag
-`v<version>` sets that version, builds, and attaches the DMG to the tag's release
-(created if missing). "Run workflow" in the Actions tab builds without a release and
-keeps the DMG for three days as a test build.
-electron-builder then writes `desktop/dist/Trackyard-<version>-arm64.dmg`. The build
-is unsigned (ad hoc); see [plan.md](plan.md) for signing and the Windows build.
+**Releases:** `.github/workflows/desktop.yml` builds both installers on GitHub. Pushing
+a tag `v<version>` sets that version, builds, and attaches the installers to the tag's
+release (created if missing). "Run workflow" in the Actions tab builds without a
+release and keeps the installers for three days as test builds.
 
 ## Evaluate against hand-made charts
 

@@ -7,8 +7,9 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "bundle": "bash scripts/bundle-mac.sh",
-    "dist": "npm run bundle && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish never"
+    "bundle": "uv run --no-project --python 3.11 scripts/bundle.py",
+    "smoke": "node scripts/smoke.js",
+    "dist": "npm run bundle && npm run smoke && electron-builder --publish never"
   },
   "build": {
     "appId": "io.github.drose030.trackyard",
@@ -38,10 +39,26 @@
       ],
       "category": "public.app-category.music",
       "identity": null,
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "artifactName": "Trackyard-${version}-${arch}.dmg"
     },
     "dmg": {
       "title": "Trackyard"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Trackyard-Setup-${version}.exe"
     }
   },
   "devDependencies": {
