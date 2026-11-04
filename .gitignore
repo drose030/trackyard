@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+
+# Copyrighted audio and everything generated from it stays out of git
+cache/
+songs/
+*.mp3
+*.ogg
+*.wav
+*.flac
+*.opus
+
+# Evaluation output (per-run tables can be large; copy the summary into docs/ by hand)
+results/
+
+.DS_Store
+
+# Converted song folders
+out/
+
+# Swift build output
+.build/

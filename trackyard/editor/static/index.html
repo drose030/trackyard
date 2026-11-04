@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trackyard Editor</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <header>
+    <div class="title"><span id="song-title">Trackyard</span></div>
+    <div class="files">
+      <button id="open-mp3" title="Convert an MP3, WAV, OGG or FLAC into a song folder">Convert MP3…</button>
+      <button id="open-folder" title="Open an existing song folder">Open song…</button>
+    </div>
+    <nav id="mode" class="mode" aria-label="Edit mode">
+      <button id="mode-notes" class="active" title="Edit the drum notes">Notes</button>
+      <button id="mode-tempo" title="Edit the tempo map: drag beat lines onto hits (M)">Tempo</button>
+    </nav>
+    <span class="edit-actions">
+      <button id="undo" title="Undo (⌘Z)">Undo</button>
+      <button id="redo" title="Redo (⇧⌘Z)">Redo</button>
+      <span class="split">
+        <button id="save" class="primary" title="Save (⌘S)">Save</button>
+        <button id="save-menu" class="primary" aria-label="More ways to save" title="More ways to save">▾</button>
+        <div id="save-pop" class="menu" hidden>
+          <button id="save-as" title="Copy the song somewhere else, e.g. the SD card, and keep editing the copy (⇧⌘S)">Save as…</button>
+        </div>
+      </span>
+    </span>
+  </header>
+  <div id="toolbar" class="bar" hidden>
+    <div id="notes-tools" class="tools">
+      <nav id="levels" aria-label="Difficulty"></nav>
+      <label>Snap
+        <select id="snap" title="Grid for new and moved notes">
+          <option value="1">1/4</option>
+          <option value="2">1/8</option>
+          <option value="3">1/12</option>
+          <option value="4" selected>1/16</option>
+          <option value="6">1/24</option>
+          <option value="8">1/32</option>
+          <option value="0">off</option>
+        </select>
+      </label>
+      <button id="uncertain" title="Jump to the next uncertain note (N, ⇧N back)">Next uncertain</button>
+      <select id="regen" title="Generate easier levels from Expert">
+        <option value="" selected>Regenerate…</option>
+        <option value="all">All levels</option>
+        <option value="hard">Hard</option>
+        <option value="medium">Medium</option>
+        <option value="easy">Easy</option>
+      </select>
+    </div>
+    <div id="tempo-tools" class="tools" hidden>
+      <span class="tempo-here" id="tempo-here"></span>
+      <label>Offset <input type="number" id="tempo-offset" step="1" title="Shifts the whole chart against the audio (song.ini delay)"> ms</label>
+      <button id="offset-down" title="Chart 5 ms earlier">−5</button>
+      <button id="offset-up" title="Chart 5 ms later">+5</button>
+      <button id="snap-beat" title="Pin the beat nearest the playhead onto the nearest drum hit">Snap beat to hit</button>
+      <button id="tempo-revert" title="Back to the tempo map and offset as opened">Revert tempo</button>
+      <span class="tempo-help" title="Drag a beat line onto a hit; hold Alt to place it freely; double-click an anchor (◆) to remove it">Drag beats onto hits · Alt: free · double-click ◆: remove</span>
+    </div>
+  </div>
+  <div id="tune" hidden aria-label="Level settings">
+    <div class="tune-row">
+      <span class="tune-title" id="tune-title">Medium</span>
+      <label>Preset
+        <select id="tune-preset" title="MPC: even steps for the pads · Clone Hero: like hand-made charts">
+          <option value="mpc">MPC</option>
+          <option value="clone-hero">Clone Hero</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <div class="tune-controls">
+        <label class="slider">Density <input type="range" id="tune-density" min="0" max="100" step="5"><span id="tune-density-v"></span></label>
+        <span id="tune-inst" class="tune-inst"></span>
+      </div>
+    </div>
+    <div class="tune-row">
+      <div class="tune-controls">
+        <label>Grid
+          <select id="tune-finest" title="Finest note value that is kept">
+            <option value="1">1/4</option>
+            <option value="2">1/8</option>
+            <option value="4">1/16</option>
+            <option value="8">1/32</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="tune-triplets"> Triplets</label>
+        <label>Hands <select id="tune-hands"><option>1</option><option>2</option></select></label>
+        <label>Notes at once <select id="tune-notes"><option>1</option><option>2</option><option>3</option></select></label>
+        <label>Shortest gap <input type="number" id="tune-gap" min="0" max="1000" step="10"> ms</label>
+      </div>
+      <span id="tune-count" class="tune-count"></span>
+    </div>
+  </div>
+  <div id="transport" class="bar transport" aria-label="Playback" hidden>
+    <button id="play" class="primary" title="Play / pause (Space)">▶︎ Play</button>
+    <span id="position" class="position"></span>
+    <label>Speed
+      <select id="speed" title="Playback speed (pitch stays)">
+        <option value="1" selected>100 %</option>
+        <option value="0.75">75 %</option>
+        <option value="0.5">50 %</option>
+      </select>
+    </label>
+    <span class="mix-click">
+      <button id="ticks" class="toggle on" title="Click on every note while playing">Note ticks</button>
+      <input type="range" id="vol-ticks" min="0" max="200" step="5" aria-label="Note ticks volume"><span class="value"></span>
+    </span>
+    <span class="mix-click">
+      <button id="metronome" class="toggle" title="Click on every beat">Metronome</button>
+      <input type="range" id="vol-metronome" min="0" max="200" step="5" aria-label="Metronome volume"><span class="value"></span>
+    </span>
+  </div>
+  <main>
+    <canvas id="view"></canvas>
+    <div id="stem-volumes" class="stem-volumes" aria-label="Stem volumes"></div>
+    <section id="start" class="overlay" hidden>
+      <div class="card">
+        <h1>Trackyard</h1>
+        <p>Turn a song into a drum chart, or open one to fix it.</p>
+        <div class="actions">
+          <button id="start-mp3" class="primary">Convert MP3…</button>
+          <button id="start-folder">Open song…</button>
+        </div>
+        <p class="out">You choose where a new song goes when you save it.</p>
+      </div>
+    </section>
+    <section id="hint" class="overlay" hidden>
+      <div class="card">
+        <h2>How the difficulty levels work</h2>
+        <p>Trackyard detects Expert from the audio. Hard, Medium and Easy are built from Expert
+          by leaving notes out, so Expert is the source and can't be regenerated itself.</p>
+        <p>Fix Expert first, then use <b>Regenerate…</b> to rebuild the easier levels.
+          That replaces hand edits on the levels you regenerate.</p>
+        <label class="check"><input type="checkbox" id="hint-hide"> Don't show this again</label>
+        <div class="actions"><button id="hint-ok" class="primary">Got it</button></div>
+      </div>
+    </section>
+    <section id="job" class="overlay" hidden>
+      <div class="card">
+        <h2 id="job-title">Converting…</h2>
+        <pre id="job-log"></pre>
+        <div class="actions"><button id="job-close" hidden>Close</button></div>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <span id="status">…</span>
+    <span class="help">Click: add · drag on empty space: select · drag notes: move (also between lanes) ·
+      ↑/↓ lane · ←/→ nudge · ⌫ delete · T switch cymbal ↔ tom · ⌘C/⌘X/⌘V copy/cut/paste at the playhead ·
+      N next uncertain · M notes/tempo mode · click a stem name: mute · 1–4 difficulty · ⌘/Ctrl+scroll: zoom</span>
+  </footer>
+  <script src="editor.js"></script>
+</body>
+</html>

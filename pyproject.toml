@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trackyard"
+version = "0.1.0"
+description = "Turn songs into playable drum charts for Beat-Train and Clone Hero"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy<2.3",
+    "soundfile>=0.13",
+    "mido>=1.3",
+    "mir_eval>=0.7",
+    "mutagen>=1.47",
+    "torch>=2.2",
+    "demucs==4.0.1",
+    # Beat and downbeat tracking (MIT; checkpoints download on first use).
+    "beat_this @ git+https://github.com/CPJKU/beat_this.git@b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c",
+    # Drum transcription: PyTorch port of ADTOF (weights derived from ADTOF, CC BY-NC-SA 4.0).
+    "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyflakes", "scikit-learn>=1.4"]
+
+[project.scripts]
+trackyard = "trackyard.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["trackyard*"]
+
+[tool.setuptools.package-data]
+"trackyard" = ["models/*.json"]
+"trackyard.editor" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
