@@ -1318,7 +1318,16 @@ async function openFolder() {
 function showJob(job) {
   $("job").hidden = false;
   $("start").hidden = true;
-  $("job-title").textContent = job.state === "failed" ? "Conversion failed" : job.state === "done" ? "Done" : `Converting ${job.audio.split("/").pop()}…`;
+  const name = job.audio.split(/[\\/]/).pop();
+  $("job-title").textContent = job.state === "failed" ? "Conversion failed" : job.state === "done" ? "Done" : `Converting ${name}`;
+  $("job-progress").hidden = job.state !== "running";
+  if (job.state === "running") {
+    const known = typeof job.fraction === "number";
+    $("job-step").textContent = known ? `${job.step}… ${Math.round(job.fraction * 100)} %` : `${job.step}…`;
+    $("job-time").textContent = `${Math.floor(job.elapsed / 60)}:${String(job.elapsed % 60).padStart(2, "0")}`;
+    $("job-bar").classList.toggle("busy", !known);
+    $("job-bar").style.width = known ? `${Math.round(job.fraction * 100)}%` : "";
+  }
   $("job-log").textContent = [...job.log, job.error].filter(Boolean).join("\n");
   $("job-close").hidden = job.state === "running";
 }

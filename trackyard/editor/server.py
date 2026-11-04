@@ -168,10 +168,16 @@ class Job:
         self.log: list[str] = []
         self.folder: Path | None = None
         self.error = ""
+        self.step, self.fraction = "Starting", None
+        self.started = time.time()
+
+    def set_progress(self, step: str, fraction: float | None = None) -> None:
+        self.step, self.fraction = step, fraction
 
     def info(self) -> dict:
         return {"audio": str(self.audio), "out_dir": str(self.out_dir), "state": self.state,
-                "log": self.log[-12:], "folder": str(self.folder) if self.folder else None, "error": self.error}
+                "log": self.log[-12:], "folder": str(self.folder) if self.folder else None, "error": self.error,
+                "step": self.step, "fraction": self.fraction, "elapsed": round(time.time() - self.started)}
 
 
 class App:
@@ -230,15 +236,17 @@ class App:
         try:
             convert = self.converter
             if convert is None:
+                job.set_progress("Loading PyTorch (the first start takes a while)")
                 from .. import analysis
                 from ..pipeline import convert as pipeline_convert
+                from ..progress import Progress
 
                 device = self.device or analysis.best_device()
+                job.log.append(f"Analysing on the {'Apple GPU' if device == 'mps' else device.upper()}")
 
                 def convert(src, out_root, log):
-                    return pipeline_convert(src, out_root, self.cache, device, log=log)
-            job.log.append(f"Converting {job.audio.name} (the first song takes longest: the models "
-                           "load, and download once, about 160 MB)…")
+                    return pipeline_convert(src, out_root, self.cache, device, log=log,
+                                            progress=Progress(job.set_progress))
             job.folder = convert(job.audio, job.out_dir, job.log.append)
             self.open(job.folder)
             job.log.append(f"Done: {job.folder}")

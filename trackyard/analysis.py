@@ -45,9 +45,9 @@ def separate_drums(mix: np.ndarray, device: str, model_name: str = "htdemucs") -
     mean, std = ref.mean(), ref.std() + 1e-8
     wav = (wav - mean) / std
     try:
-        sources = apply_model(model, wav[None], device=device, split=True, overlap=0.25, progress=False)[0]
+        sources = apply_model(model, wav[None], device=device, split=True, overlap=0.25, progress=True)[0]
     except (RuntimeError, NotImplementedError):  # some ops are missing on MPS
-        sources = apply_model(model, wav[None], device="cpu", split=True, overlap=0.25, progress=False)[0]
+        sources = apply_model(model, wav[None], device="cpu", split=True, overlap=0.25, progress=True)[0]
     drums = sources[model.sources.index("drums")] * std + mean
     return drums.T.numpy().astype(np.float32)
 
@@ -66,7 +66,7 @@ def _adtof():
     return model
 
 
-def adtof_activations(path: Path, chunk: int = 6000, overlap: int = 200) -> np.ndarray:
+def adtof_activations(path: Path, chunk: int = 6000, overlap: int = 200, progress=None) -> np.ndarray:
     """Frame-wise class activations (frames, 5) at 100 fps, columns in ADTOF_CLASSES order.
 
     Long songs run in overlapping chunks; each chunk keeps only its centre so the
@@ -90,6 +90,8 @@ def adtof_activations(path: Path, chunk: int = 6000, overlap: int = 200) -> np.n
             keep_hi = min(n, start + chunk)
             out[start:keep_hi] = pred[start - lo : keep_hi - lo]
             start = keep_hi
+            if progress:
+                progress(start / n)
     return out
 
 

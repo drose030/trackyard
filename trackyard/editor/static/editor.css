@@ -214,4 +214,12 @@ footer {
   color: var(--muted);
   white-space: pre-wrap;
 }
+.job-progress { margin: 0 0 12px; }
+.job-progress[hidden] { display: none; }
+.job-step { display: flex; justify-content: space-between; gap: 12px; color: var(--text); margin-bottom: 6px; }
+#job-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.job-track { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+#job-bar { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.4s; }
+#job-bar.busy { width: 30%; animation: busy 1.4s ease-in-out infinite; }
+@keyframes busy { from { margin-left: -30%; } to { margin-left: 100%; } }
 .out { font-size: 12px; }

@@ -27,6 +27,7 @@ from .difficulty import DEFAULT_PRESET, all_levels, preset_settings
 from .export import folder_name, read_tags, write_ini, write_midi, write_ogg, write_sidecar
 from .lanes import Context
 from .notes import ChartNote, build_notes
+from .progress import Progress, demucs_segments, model_downloads
 from .tempo import TempoFit, fit_tempo_map
 
 # Kicks come from the Demucs stem unless it found far fewer than the full mix: Demucs
@@ -51,11 +52,17 @@ class Analysis:
 
 def analyze(cache_dir: Path, make_mix: Callable[[], np.ndarray], device: str,
             sources: tuple[str, ...] = ("mix", "demucs"), drum_stems: list[Path] | None = None,
-            log: Callable[[str], None] = print) -> Analysis:
-    d = cache_dir
+            log: Callable[[str], None] = print, progress: Progress | None = None) -> Analysis:
+    progress = progress or Progress()
+    with model_downloads(progress):
+        return _analyze(cache_dir, make_mix, device, sources, drum_stems, log, progress)
+
+
+def _analyze(d: Path, make_mix, device, sources, drum_stems, log, progress: Progress) -> Analysis:
     d.mkdir(parents=True, exist_ok=True)
     mix_path = d / "mix.wav"
     if not mix_path.exists():
+        progress("Reading the audio")
         audio_io.write(mix_path, make_mix())
     mix = None
 
@@ -64,8 +71,10 @@ def analyze(cache_dir: Path, make_mix: Callable[[], np.ndarray], device: str,
         paths["demucs"] = d / "demucs_drums.wav"
         if not paths["demucs"].exists():
             t = time.time()
+            progress("Separating the drums (Demucs; on a CPU this takes a few minutes)", 0.0)
             mix = audio_io.read(mix_path)
-            audio_io.write(paths["demucs"], analysis.separate_drums(mix, device))
+            with demucs_segments(progress):
+                audio_io.write(paths["demucs"], analysis.separate_drums(mix, device))
             log(f"  demucs {time.time() - t:.0f}s")
     if "stem" in sources and drum_stems:
         paths["stem"] = d / "drum_stem.wav"
@@ -79,13 +88,15 @@ def analyze(cache_dir: Path, make_mix: Callable[[], np.ndarray], device: str,
         npy = d / f"adtof_{name}.npy"
         if not npy.exists():
             t = time.time()
-            np.save(npy, analysis.adtof_activations(p))
+            progress(f"Finding the drum hits (ADTOF, {name})", 0.0)
+            np.save(npy, analysis.adtof_activations(p, progress=progress.fraction))
             log(f"  adtof[{name}] {time.time() - t:.0f}s")
         acts[name] = np.load(npy)
 
     beats_json = d / "beats_v2.json"  # v2: sub-frame refined
     if not beats_json.exists():
         t = time.time()
+        progress("Finding the beat (Beat This!)")
         mix = mix if mix is not None else audio_io.read(mix_path)
         beats, downs = analysis.track_beats(mix, device)
         beats_json.write_text(json.dumps({"beats": beats, "downbeats": downs}))
@@ -144,13 +155,15 @@ def file_cache_key(path: Path) -> str:
 def convert(src: Path, out_root: Path, cache: Path, device: str, tempo: str = "auto",
             taken: set[str] | None = None,
             triplets: bool = True, finest: int = 32, stems: bool = True, lower: bool = True,
-            learned_lanes: bool = True, levels_preset: str = DEFAULT_PRESET,
+            learned_lanes: bool = True, levels_preset: str = DEFAULT_PRESET, progress: Progress | None = None,
             log: Callable[[str], None] = print) -> Path:
     """One audio file → a playable song folder under `out_root`. Returns the folder.
 
     `taken`: folder names already written in this run; a clash gets " (2)", " (3)", …
     """
-    a = analyze(cache / file_cache_key(src), lambda: audio_io.decode(src), device, log=log)
+    progress = progress or Progress()
+    a = analyze(cache / file_cache_key(src), lambda: audio_io.decode(src), device, log=log, progress=progress)
+    progress("Writing the chart")
     chart = build_chart(a, tempo, triplets, finest, learned_lanes)
     info, cover = read_tags(src)
     mix = audio_io.read(a.mix_path)
