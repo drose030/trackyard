@@ -1,0 +1,51 @@
+{
+  "name": "trackyard-desktop",
+  "productName": "Trackyard",
+  "version": "0.1.0",
+  "description": "Turn songs into playable drum charts for Beat-Train and Clone Hero",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "bundle": "bash scripts/bundle-mac.sh",
+    "dist": "npm run bundle && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish never"
+  },
+  "build": {
+    "appId": "io.github.drose030.trackyard",
+    "productName": "Trackyard",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "loading.html"
+    ],
+    "extraResources": [
+      {
+        "from": "build/python",
+        "to": "python"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.music",
+      "identity": null,
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "title": "Trackyard"
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0"
+  }
+}

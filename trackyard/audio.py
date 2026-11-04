@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,10 +12,20 @@ import soundfile as sf
 SAMPLE_RATE = 44100
 
 
+def ffmpeg() -> str:
+    """ffmpeg on the PATH, else the copy bundled with imageio-ffmpeg (the desktop app)."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    import imageio_ffmpeg
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
 def decode(path: Path, sr: int = SAMPLE_RATE) -> np.ndarray:
     """Any ffmpeg-readable file → float32 array of shape (samples, 2)."""
     raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
+        [ffmpeg(), "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
         check=True,
         capture_output=True,
     ).stdout

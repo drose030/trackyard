@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from . import audio as audio_io
+from . import librosa_lite
 
 ADTOF_FPS = 100
 # ADTOF output order (General MIDI pitches 35, 38, 47, 42, 49) in our class names.
@@ -56,6 +57,7 @@ def separate_drums(mix: np.ndarray, device: str, model_name: str = "htdemucs") -
 
 @functools.cache
 def _adtof():
+    librosa_lite.install()
     from adtof_pytorch import calculate_n_bins, create_frame_rnn_model, get_default_weights_path, load_pytorch_weights
 
     model = create_frame_rnn_model(calculate_n_bins())
@@ -70,6 +72,7 @@ def adtof_activations(path: Path, chunk: int = 6000, overlap: int = 200) -> np.n
     Long songs run in overlapping chunks; each chunk keeps only its centre so the
     bidirectional GRUs always see context.
     """
+    librosa_lite.install()
     from adtof_pytorch import load_audio_for_model
 
     model = _adtof()

@@ -22,3 +22,11 @@ out/
 
 # Swift build output
 .build/
+
+# Desktop app: npm packages, the bundled Python and models, built installers
+desktop/node_modules/
+desktop/build/
+desktop/dist/
+
+# setuptools output from installing the package into the desktop bundle
+/build/

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 import sys
@@ -236,7 +237,8 @@ class App:
 
                 def convert(src, out_root, log):
                     return pipeline_convert(src, out_root, self.cache, device, log=log)
-            job.log.append(f"Converting {job.audio.name} (the first song takes longest: models load)…")
+            job.log.append(f"Converting {job.audio.name} (the first song takes longest: the models "
+                           "load, and download once, about 160 MB)…")
             job.folder = convert(job.audio, job.out_dir, job.log.append)
             self.open(job.folder)
             job.log.append(f"Done: {job.folder}")
@@ -421,8 +423,17 @@ def make_handler(app: App, picker=pick):
     return Handler
 
 
-def serve(folder: Path | None, port: int = 8765, open_browser: bool = True, cache: Path = Path("cache")) -> None:
+def serve(folder: Path | None, port: int = 8765, open_browser: bool = True, cache: Path = Path("cache"),
+          exit_with_stdin: bool = False) -> None:
     app = App(folder, cache)
+    if exit_with_stdin:
+        # Started by the desktop app: its pipe closes when it quits or crashes, and the
+        # server must not outlive it.
+        def watch() -> None:
+            sys.stdin.read()
+            os._exit(0)
+
+        threading.Thread(target=watch, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     what = app.song.folder.name if app.song else "Trackyard"

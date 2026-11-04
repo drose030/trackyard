@@ -1284,6 +1284,7 @@ function okToLeave() {
 }
 
 async function pickPath(kind, start) {
+  if (window.trackyardDesktop) return (await window.trackyardDesktop.pick(kind, start)) || null;
   if (!state.app.native_picker) {
     return prompt(kind === "audio" ? "Path of the audio file:" : "Path of the folder:", start || "") || null;
   }

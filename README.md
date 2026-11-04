@@ -31,6 +31,17 @@ uv pip install -p .venv/bin/python -e .
 
 The first conversion downloads about 160 MB of model weights once.
 
+### Or: the Mac app
+
+`Trackyard-<version>-arm64.dmg` (about 300 MB) holds Python, PyTorch and ffmpeg; nothing
+else needs installing. The first conversion downloads the models once (about 160 MB).
+Open the DMG and drag Trackyard to Applications. The app isn't signed
+yet, so the first time macOS refuses to open it: go to **System Settings → Privacy &
+Security** and click **Open Anyway**. To build the DMG yourself, see
+[docs/development.md](docs/development.md#the-desktop-app).
+
+The app opens the editor in its own window; everything below works the same.
+
 ## Start
 
 ```bash

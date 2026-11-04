@@ -6,7 +6,7 @@ in [evaluation.md](evaluation.md).
 
 ## Setup
 
-Same requirements as in the README, plus the dev extras (pytest, pyflakes,
+Same requirements as in the README, plus the dev extras (pytest, pyflakes, mir_eval,
 scikit-learn):
 
 ```bash
@@ -80,6 +80,46 @@ they can seek.
   the level being edited decides it everywhere.
 - Tempo mode finds drum hits in the drum stems in the browser (energy jumps of 8 dB
   within 4 ms) for snapping and the timing dots.
+
+## The desktop app
+
+`desktop/` is an Electron app around the editor. `main.js` starts
+`python -m trackyard.cli edit --no-browser --port 0 --exit-with-stdin`, waits for the
+address it prints and loads it in a window; `preload.js` gives the editor native file
+dialogs. The server's data (analysis cache and drafts in `analysis/`, model weights in `torch/`,
+bytecode in `pycache/`) goes to the app's data folder
+(`~/Library/Application Support/Trackyard` on a Mac), its log to `logs/server.log`
+there. The server quits when the app's pipe to it closes, also after a crash.
+
+```bash
+cd desktop
+npm install
+npm start           # runs against the repo's .venv
+npm run dist        # macOS: bundle Python, then build the DMG
+```
+
+`npm run dist` runs `scripts/bundle-mac.sh`, which builds `desktop/build/python`: a
+copy of uv's standalone Python 3.11 (python-build-standalone, which can be moved
+anywhere) with Trackyard installed, and only what a conversion imports:
+- librosa and its numba/llvmlite/scikit-learn stack are removed; ADTOF only uses
+  `librosa.load` and `librosa.stft`, and `trackyard/librosa_lite.py` stands in for them
+  (`tests/test_librosa_lite.py` checks they match; on a whole song the ADTOF hits are
+  identical);
+- scipy, sympy, networkx, pip, setuptools, PyTorch's headers, compiler and ONNX
+  export, and Tk are removed. To check a change, list `sys.modules` after a
+  conversion;
+- no bytecode: the app sets `PYTHONPYCACHEPREFIX` to its data folder;
+- no model weights: the first conversion downloads them into the data folder.
+
+ffmpeg comes from the `imageio-ffmpeg` package when there's none on the `PATH`.
+The DMG is about 300 MB, the installed app about 900 MB.
+
+**Releases:** `.github/workflows/desktop.yml` builds the DMG on GitHub. Pushing a tag
+`v<version>` sets that version, builds, and attaches the DMG to the tag's release
+(created if missing). "Run workflow" in the Actions tab builds without a release and
+keeps the DMG for three days as a test build.
+electron-builder then writes `desktop/dist/Trackyard-<version>-arm64.dmg`. The build
+is unsigned (ad hoc); see [plan.md](plan.md) for signing and the Windows build.
 
 ## Evaluate against hand-made charts
 

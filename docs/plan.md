@@ -107,9 +107,33 @@ Still open after that:
 - user presets for the difficulty controls
 - re-detect Expert from the audio (replaces hand edits; the analysis is cached)
 - `.sng` song files
-- Electron packaging for macOS, Windows and Linux. Plan: a small app that sets up
-  Python with `uv` and downloads the models on first start, then runs this server.
-  On hold for now.
+
+### 4. Desktop app for macOS and Windows (in progress)
+
+An Electron app (`desktop/`) that starts the editor server and shows it in its own
+window, with native file dialogs. Most people should download one installer and
+start right away.
+
+- **Everything in the installer** but the model weights: Python, the Trackyard
+  packages, PyTorch for the CPU (on a Mac also the Apple GPU) and ffmpeg, trimmed to
+  what a conversion imports. About 300 MB on macOS, well under GitHub's 2 GB limit per
+  release file. The models (about 160 MB) download on the first conversion.
+- **NVIDIA on Windows:** a "Download GPU acceleration" button in the app fetches the
+  CUDA build of PyTorch (over 2 GB, straight from PyTorch's package index) into the
+  user's data folder; the server uses it from then on.
+- **AMD on Windows:** PyTorch with ROCm exists for Radeon RX 7000/9000 on Windows 11,
+  but needs AMD's own driver package. Later, if at all; the CPU always works.
+- Intel Macs are out: PyTorch no longer ships current builds for them.
+
+Steps:
+1. macOS app: Electron shell (server, window, dialogs), bundled Python and models,
+   unsigned DMG.
+2. Windows app, CPU: built with GitHub Actions, tested on a real PC.
+3. The NVIDIA download.
+4. Signing (Apple Developer ID and notarization; a Windows code-signing certificate)
+   once other people use it; until then the README explains the first-start warnings.
+
+Later, maybe: a Linux AppImage.
 
 ## Open questions
 

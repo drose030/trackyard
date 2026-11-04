@@ -43,12 +43,14 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--cache", type=Path, default=Path("cache"), help="analysis cache for conversions (default: cache)")
     e.add_argument("--port", type=int, default=8765, help="local port (default 8765; 0 picks a free one)")
     e.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    e.add_argument("--exit-with-stdin", action="store_true", help=argparse.SUPPRESS)  # the desktop app
     args = ap.parse_args(argv)
 
     if args.command == "edit":
         from .editor.server import serve
 
-        serve(args.folder, args.port, open_browser=not args.no_browser, cache=args.cache)
+        serve(args.folder, args.port, open_browser=not args.no_browser, cache=args.cache,
+              exit_with_stdin=args.exit_with_stdin)
         return
 
     if args.sd and not args.sd.is_dir():
