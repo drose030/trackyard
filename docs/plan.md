@@ -120,7 +120,8 @@ start right away.
   release file. The models (about 160 MB) download on the first conversion.
 - **NVIDIA on Windows:** "Download GPU support" on the start screen fetches the CUDA
   build of PyTorch (2 GB, straight from PyTorch's package index) into the user's data
-  folder; the server uses it from then on. Built, not yet tested on a real GPU.
+  folder; the server uses it from then on. Tested on a real PC: a song takes about
+  1 minute instead of 3.5 on the CPU.
 - **AMD on Windows:** PyTorch with ROCm exists for Radeon RX 7000/9000 on Windows 11,
   but needs AMD's own driver package. Later, if at all; the CPU always works.
 - Intel Macs are out: PyTorch no longer ships current builds for them.
