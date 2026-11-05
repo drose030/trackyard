@@ -54,27 +54,38 @@ In `trackyard/`:
      plus kick.
    - `clone-hero`: fixed rules tuned to match hand-made charts: hi-hats and kicks thin
      out, fills slow down, Easy is about one hand plus one kick per bar.
-6. **`export.py`** writes the song folder: `notes.mid` (pro drums in four difficulties,
-   tempo map, time signatures, `BEAT` and `EVENTS` tracks), `song.ini`, the OGG stems,
-   the cover and `trackyard.json` (per-note confidence, conversion and difficulty
-   settings).
+6. The song folder: **`chartfile.py`** writes `notes.mid` (pro drums in four
+   difficulties, tempo map, time signatures, `BEAT` and `EVENTS` tracks);
+   **`export.py`** writes `song.ini`, the OGG stems, the cover and `trackyard.json`
+   (per-note confidence, conversion and difficulty settings).
 
 ## The editor
 
 `trackyard edit` runs `trackyard/editor/server.py`, a standard-library HTTP server on
-127.0.0.1, with plain JS and canvas in `trackyard/editor/static/` (no build step). The
-server's module docstring lists the JSON API. Web Audio synthesizes the note ticks and
-the metronome; the stems play through `<audio>` elements, served with range requests so
-they can seek.
+127.0.0.1, with plain JS (ES modules) and canvas in `trackyard/editor/static/` (no build
+step). The server's module docstring lists the JSON API. `editor.js` is the UI and
+drawing; behind it:
+
+- `songdoc.js`: the song being edited (notes of every level, level settings, tempo
+  map) with undo and redo. Every change goes through it, and it keeps what a chart file
+  can hold.
+- `tempomap.js`: ticks ↔ seconds, pinning beats, anchors, beats; the same math as
+  `trackyard/tempomap.py`.
+- `transport.js`: playback. The stems play through `<audio>` elements, served with
+  range requests so they can seek; Web Audio synthesizes the note ticks and the
+  metronome.
 
 - New songs from Convert MP3 are drafts in `cache/drafts/` until their first save moves
   them into the chosen folder. A new conversion deletes the other unsaved drafts.
 - Settings (last save folder, last Save-as folder, dismissed hints) live in
   `~/.trackyard/editor.json`; volumes are kept in the browser's local storage.
-- `trackyard/chartedit.py` saves: it replaces only the drum gems and their pro-drums
+- `trackyard/chartfile.py` reads and saves the chart, with one adapter each for
+  `notes.mid` and `notes.chart`. Saving replaces only the drum gems and their pro-drums
   markers (tom markers in MIDI, cymbal markers in `.chart`), and the tempo events and
   offset when they changed. Everything else in the file stays. The offset is written as
-  `delay` in `song.ini` (and as `Offset` in a `.chart`).
+  `delay` in `song.ini` (and as `Offset` in a `.chart`). It refuses notes a chart can't
+  hold: two gems of one colour on a tick, or a cymbal on one difficulty where another
+  has a tom.
 - In the chart file, the Cymbal and Floor tom rows are the green lane as cymbal and as
   tom. Cymbal versus tom is stored per lane and tick for all difficulties at once, so
   the level being edited decides it everywhere.
@@ -192,8 +203,11 @@ exported to JSON and evaluated with numpy.
 node --check trackyard/editor/static/editor.js
 ```
 
-`tests/test_editor.py` checks the editor API and that saving keeps everything except
-what was edited.
+`tests/test_chartfile.py` checks that saving a chart keeps everything except what was
+edited, for MIDI and `.chart`; `tests/test_editor.py` checks the editor API. The
+editor's JS modules have node tests in `tests/js/`, which pytest runs when `node` is
+installed (`tests/test_editor_js.py`), together with a check that the JS and Python
+tempo maps agree.
 
 `tests/test_export.py` also checks exported charts against Beat-Train's own chart parser.
 It builds `tools/beattrain-check`, a tiny Swift tool whose `BeatTrainCore` is a symlink

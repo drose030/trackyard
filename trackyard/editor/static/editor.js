@@ -1,9 +1,10 @@
-"use strict";
+import { LEVELS, ROW_ORDER, SongDoc, rowOf } from "./songdoc.js";
+import { TempoMap } from "./tempomap.js";
+import { Transport } from "./transport.js";
 
-const LEVELS = ["expert", "hard", "medium", "easy"];
 // Rows top to bottom: Beat-Train's six instruments. In the chart file (Clone Hero pro
 // drums) "orange" is the green lane as a cymbal and "green" the green lane as a tom.
-const ROWS = ["red", "yellow", "blue", "orange", "green", "kick"];
+const ROWS = ROW_ORDER;
 const ROW_NAMES = { red: "Snare", yellow: "Hi-hat / Tom", blue: "Tom / Ride", orange: "Cymbal", green: "Floor tom", kick: "Bass drum" };
 const PADS = ["yellow", "blue", "green"];  // chart lanes that can be cymbal or tom
 const COLORS = { kick: "#9b6bff", red: "#ef4f4f", yellow: "#f5c84b", blue: "#4f8ff7", orange: "#ff9a3c", green: "#3fbf6f" };
@@ -16,30 +17,25 @@ const RULER_H = 24, WAVE_H = 56, ROW_H = 44, NOTE_W = 14;
 const state = {
   app: null,           // /api/state
   song: null,          // /api/song
+  doc: null,           // SongDoc: notes, level settings, tempo map, undo
   level: "expert",
-  levels: {},          // level → [{tick, lane}], sorted by tick
   selection: new Set(), // keys "tick:lane" in the current level
   clipboard: null,     // [{dt, lane}]
-  undo: [], redo: [],
-  dirty: false,
   view: { start: 0, pxPerSec: 160 },
   snap: 4,
   speed: 1,
   ticksOn: true, metronomeOn: false,
   drag: null,
   box: null,           // rubber-band selection
-  levelSettings: {},   // hard/medium/easy → how they are generated (trackyard.json)
-  tuning: null,        // {level, at}: slider moves within a second share one undo step
   tempoMode: false,
-  tempoDrag: null,     // {tick, base, baseOffset, before, moved}
-  tempoOpened: null,   // tempo map and offset as opened, for "Revert tempo"
-  tempoSaved: "",      // tempoKey() at the last save
+  tempoDrag: null,     // {tick, base, key, moved}
+  tempoOpened: null,   // TempoMap as opened, for "Revert tempo"
   onsets: [],          // drum hits in audio seconds, sorted
 };
 
-// Playback runs on <audio> elements (they keep the pitch when slowed down); the decoded
-// buffers are only for the waveforms. Note ticks and the metronome use Web Audio.
-const audio = { ctx: null, els: {}, peaks: {}, muted: {}, playing: false, pausedAt: 0, scheduledUntil: 0, timer: null };
+// The stems as drawn: waveform peaks, role (drums, mix, crowd) and the longest duration.
+// Playback itself is transport.js.
+const audio = { peaks: {}, roles: {}, duration: 0 };
 
 const canvas = document.getElementById("view");
 const g = canvas.getContext("2d");
@@ -47,23 +43,18 @@ const $ = (id) => document.getElementById(id);
 
 // MARK: - Time
 
-function tempoAt(tick) {
-  const t = state.song.tempos;
-  let i = 0;
-  while (i + 1 < t.length && t[i + 1].tick <= tick) i++;
-  return t[i];
-}
+const tickToSec = (tick) => state.doc.tempo.seconds(tick);  // audio time
+const secToTick = (sec) => state.doc.tempo.tick(sec);
 
-function tickToSec(tick) {  // audio time
-  const t = tempoAt(tick);
-  return t.sec + (tick - t.tick) / state.song.ppq * 60 / t.bpm + state.song.offset;
-}
-
-function secToTick(sec) {
-  const s = sec - state.song.offset, t = state.song.tempos;
-  let i = 0;
-  while (i + 1 < t.length && t[i + 1].sec <= s) i++;
-  return t[i].tick + (s - t[i].sec) * t[i].bpm / 60 * state.song.ppq;
+// Beats up to the later of the last note and the end of the audio, plus two bars; they
+// only change with the time signatures and that end.
+let beatCache = { end: -1, list: [] };
+function beats() {
+  const tm = state.doc.tempo;
+  const last = Math.max(0, ...LEVELS.map((l) => state.doc.levels[l].at(-1)?.tick ?? 0), tm.tick(audio.duration));
+  const end = (Math.ceil(last / tm.ppq) + 8) * tm.ppq;
+  if (beatCache.end !== end) beatCache = { end, list: tm.beats(end) };
+  return beatCache.list;
 }
 
 function snapTick(tick) {
@@ -74,7 +65,7 @@ function snapTick(tick) {
 
 function barOf(tick) {
   let bar = 0;
-  for (const b of state.song.beats) { if (b.tick > tick) break; if (b.down) bar++; }
+  for (const b of beats()) { if (b.tick > tick) break; if (b.down) bar++; }
   return bar;
 }
 
@@ -86,63 +77,26 @@ const lanesTop = () => RULER_H + waveH() * waveStems().length;
 
 const key = (n) => `${n.tick}:${n.lane}`;
 const color = (lane) => lane.split("-")[0];
-const rowOf = (lane) => (lane === "green-cym" ? "orange" : lane === "green-tom" ? "green" : color(lane));
-const notes = () => state.levels[state.level];
+const notes = () => state.doc.levels[state.level];
 
-function snapshot() {
-  const levels = {};
-  for (const l of LEVELS) levels[l] = state.levels[l].map((n) => ({ ...n }));
-  return { levels, settings: structuredClone(state.levelSettings),
-           tempos: structuredClone(state.song.tempos), offset: state.song.offset };
+// Every change to the song goes through the document; the level being edited decides
+// cymbal versus tom (songdoc.js).
+function commit(change, options = {}) {
+  state.doc.edit(change, { level: state.level, ...options });
 }
 
-function commit(change, coalesce = false) {
-  if (!coalesce) state.undo.push(snapshot());
-  state.redo = [];
-  change();
-  for (const l of LEVELS) state.levels[l] = dedupe(state.levels[l]);
-  syncPadTypes();
-  setDirty(true);
-  draw();
-}
-
-function dedupe(list) {
-  const seen = new Map();
-  for (const n of list) seen.set(`${n.tick}:${color(n.lane)}`, n);  // one note per lane and tick
-  return [...seen.values()].sort((a, b) => a.tick - b.tick || ROWS.indexOf(rowOf(a.lane)) - ROWS.indexOf(rowOf(b.lane)));
-}
-
-function syncPadTypes() {
-  // notes.mid stores "tom" per lane and tick for all difficulties at once, so the level
-  // being edited decides cymbal vs. tom for the same lane and tick everywhere.
-  const type = new Map();
-  for (const n of notes()) if (PADS.includes(color(n.lane))) type.set(`${n.tick}:${color(n.lane)}`, n.lane);
-  for (const l of LEVELS) {
-    if (l === state.level) continue;
-    for (const n of state.levels[l]) {
-      const t = type.get(`${n.tick}:${color(n.lane)}`);
-      if (t) n.lane = t;
-    }
-  }
-}
-
-function undo(from, to) {
-  if (!from.length) return;
-  to.push(snapshot());
-  ({ levels: state.levels, settings: state.levelSettings, tempos: state.song.tempos, offset: state.song.offset } = from.pop());
-  renderTempo();
-  state.tuning = null;
-  state.selection.clear();
+function onDocChange(what) {
+  if (what.undo) state.selection.clear();
+  renderHistory();
   renderTune();
-  setDirty(true);
+  renderTempo();
   draw();
 }
 
-function setDirty(dirty) {
-  state.dirty = dirty;
-  $("save").classList.toggle("dirty", dirty);
-  $("undo").disabled = !state.undo.length;
-  $("redo").disabled = !state.redo.length;
+function renderHistory() {
+  $("save").classList.toggle("dirty", state.doc.dirty);
+  $("undo").disabled = !state.doc.canUndo;
+  $("redo").disabled = !state.doc.canRedo;
   renderLevels();
 }
 
@@ -180,7 +134,7 @@ function laneInRow(lane, row) {
 // MARK: - Drawing
 
 function waveStems() {
-  const rank = (n) => (/^drums/i.test(n) ? 0 : /^crowd/i.test(n) ? 2 : 1);
+  const rank = (n) => ({ drums: 0, mix: 1, crowd: 2 })[audio.roles[n]] ?? 1;
   return Object.keys(audio.peaks).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
@@ -196,15 +150,37 @@ function stemAt(x, y) {
 const mix = { levels: {} };
 try { mix.levels = JSON.parse(localStorage.getItem("trackyard.mix")) || {}; } catch { /* private mode */ }
 
-function setLevelVolume(key, value) {
-  mix.levels[key] = value;
-  try { localStorage.setItem("trackyard.mix", JSON.stringify(mix.levels)); } catch { /* not remembered */ }
-  if (key.startsWith("stem:")) {
-    const el = audio.els[key.slice(5)];
-    if (el) el.volume = Math.min(1, value);
-  } else if (audio[key]) {
-    audio[key].gain.value = value;
+// The note ticks and the metronome for a stretch of audio time, as the switches say.
+function sounds(from, until) {
+  const out = [];
+  if (state.ticksOn) {
+    for (const n of notes()) {
+      const sec = tickToSec(n.tick);
+      if (sec >= from && sec < until) out.push({ sec, sound: n.lane });
+    }
   }
+  if (state.metronomeOn) {
+    for (const b of beats()) {
+      const sec = tickToSec(b.tick);
+      if (sec >= from && sec < until) out.push({ sec, sound: b.down ? "downbeat" : "beat" });
+    }
+  }
+  return out;
+}
+
+const transport = new Transport({
+  sounds,
+  levels: mix.levels,
+  onState: (playing) => {
+    $("play").textContent = playing ? "❚❚ Pause" : "▶︎ Play";
+    if (playing) requestAnimationFrame(frame);
+    else draw();
+  },
+});
+
+function setLevelVolume(key, value) {
+  try { localStorage.setItem("trackyard.mix", JSON.stringify({ ...mix.levels, [key]: value })); } catch { /* not remembered */ }
+  transport.setVolume(key, value);
 }
 
 function renderMixer() {
@@ -239,8 +215,7 @@ function bindVolume(input, key) {
 }
 
 function toggleMute(stem) {
-  audio.muted[stem] = !audio.muted[stem];
-  audio.els[stem].muted = audio.muted[stem];
+  transport.toggleMute(stem);
   draw();
 }
 
@@ -295,9 +270,9 @@ function drawGutter(h) {
     const mid = RULER_H + i * waveH() + (waveH() > 50 ? 17 : 12);  // the volume slider sits below
     let label = name;
     while (label.length > 1 && g.measureText(label).width > GUTTER - 44) label = label.slice(0, -1);
-    g.fillStyle = audio.muted[name] ? "#5c6270" : "#9097a6";
+    g.fillStyle = transport.muted[name] ? "#5c6270" : "#9097a6";
     g.fillText(label === name ? name : `${label}…`, 10, mid);
-    drawSpeaker(GUTTER - 20, mid, audio.muted[name]);
+    drawSpeaker(GUTTER - 20, mid, transport.muted[name]);
   });
   const top = lanesTop();
   ROWS.forEach((row, i) => {
@@ -336,7 +311,7 @@ function drawSpeaker(x, y, muted) {
 }
 
 function drawGrid(w, h, t0, t1) {
-  for (const b of state.song.beats) {
+  for (const b of beats()) {
     const s = tickToSec(b.tick);
     if (s < t0 - 1 || s > t1 + 1) continue;
     const x = Math.round(secToX(s)) + 0.5;
@@ -352,7 +327,7 @@ function drawRuler(w, t0, t1) {
   g.font = "11px -apple-system, sans-serif";
   g.textBaseline = "middle";
   let bar = 0;
-  for (const b of state.song.beats) {
+  for (const b of beats()) {
     if (b.down) bar++;
     const s = tickToSec(b.tick);
     if (s < t0 - 2 || s > t1) continue;
@@ -375,7 +350,7 @@ function drawWaves(w) {
     const p = audio.peaks[name];
     g.fillStyle = "#1a1d23";
     g.fillRect(0, top, w, h - 1);
-    g.fillStyle = audio.muted[name] ? "#2c313b" : /^drums/i.test(name) ? "#6f7a92" : "#4d5566";
+    g.fillStyle = transport.muted[name] ? "#2c313b" : audio.roles[name] === "drums" ? "#6f7a92" : "#4d5566";
     const perPx = p.rate / state.view.pxPerSec;
     for (let x = GUTTER; x < w; x++) {
       const a = Math.floor(xToSec(x) * p.rate);
@@ -440,55 +415,32 @@ function drawNote(n, x, y, selected) {
 
 // MARK: - Audio
 
-function refElement() {
-  const els = Object.values(audio.els);
-  return els.reduce((a, b) => ((b.duration || 0) > (a.duration || 0) ? b : a), els[0]);
-}
-
-function position() {
-  const ref = audio.playing && refElement();
-  return ref ? ref.currentTime : audio.pausedAt;
-}
+const position = () => transport.position();
 
 async function loadAudio() {
-  stopAudio();
-  audio.els = {}; audio.peaks = {}; audio.muted = {};
-  if (!audio.ctx) {
-    audio.ctx = new AudioContext();
-    for (const bus of ["ticks", "metronome"]) {
-      audio[bus] = audio.ctx.createGain();
-      audio[bus].gain.value = mix.levels[bus] ?? 1;
-      audio[bus].connect(audio.ctx.destination);
+  audio.peaks = {}; audio.roles = {}; audio.duration = 0;
+  const roles = state.song.stem_roles;
+  const stems = state.song.stems.map((name) => ({
+    name, stem: name.replace(/\.[^.]+$/, ""), url: `/audio/${encodeURIComponent(name)}?v=${state.app.version}`,
+    muted: roles[name] === "crowd",
+  }));
+  const hasDrums = stems.some((s) => roles[s.name] === "drums");
+  status(`Loading audio (${stems.length} stems)…`);
+  const buffers = await transport.load(stems);
+  for (const { name, stem } of stems) {
+    const buf = buffers[stem];
+    if (!buf) continue;
+    audio.roles[stem] = roles[name];
+    audio.peaks[stem] = peaks(buf);
+    audio.duration = Math.max(audio.duration, buf.duration);
+    if (roles[name] === "drums" || (!hasDrums && /^song$/i.test(stem))) {
+      state.onsets = mergeOnsets(state.onsets, detectOnsets(buf));
     }
   }
-  const names = state.song.stems;
-  status(`Loading audio (${names.length} stems)…`);
-  await Promise.all(names.map(async (name) => {
-    const url = `/audio/${encodeURIComponent(name)}?v=${state.app.version}`;
-    const stem = name.replace(/\.[^.]+$/, "");
-    try {
-      const data = await (await fetch(url)).arrayBuffer();
-      const buf = await audio.ctx.decodeAudioData(data);
-      audio.peaks[stem] = peaks(buf);
-      if (/^drums/i.test(stem) || (/^song$/i.test(stem) && !names.some((n) => /^drums/i.test(n)))) {
-        state.onsets = mergeOnsets(state.onsets, detectOnsets(buf));
-      }
-      const el = new Audio(url);
-      el.preload = "auto";
-      el.preservesPitch = true;
-      el.webkitPreservesPitch = true;
-      el.muted = audio.muted[stem] = /^crowd/i.test(stem);
-      el.volume = Math.min(1, mix.levels[`stem:${stem}`] ?? 1);
-      el.addEventListener("ended", () => { if (el === refElement()) pause(); });
-      audio.els[stem] = el;
-    } catch (e) {
-      console.warn("could not load", name, e);
-    }
-  }));
   renderMixer();
   resize();
   const n = notes().filter((x) => confidence(x) < LOW_CONFIDENCE).length;
-  status(`${Object.keys(audio.els).length} stems loaded · ${n} uncertain notes in ${state.level} (N jumps to them)`);
+  status(`${Object.keys(buffers).length} stems loaded · ${n} uncertain notes in ${state.level} (N jumps to them)`);
 }
 
 function peaks(buf, rate = 200) {
@@ -506,122 +458,23 @@ function peaks(buf, rate = 200) {
   return { rate, data: out };
 }
 
-async function play() {
+function play() {
   if (!state.song) return;
-  if (audio.playing) return pause();
-  audio.ctx.resume();
-  const from = Math.max(0, audio.pausedAt);
-  for (const el of Object.values(audio.els)) {
-    el.currentTime = Math.min(from, el.duration || from);
-    el.playbackRate = state.speed;
-  }
-  await Promise.all(Object.values(audio.els).map((el) => el.play().catch(() => {})));
-  audio.scheduledUntil = from;
-  audio.playing = true;
-  $("play").textContent = "❚❚ Pause";
-  // Clicks run on their own timer: animation frames stop in background tabs.
-  clearInterval(audio.timer);
-  audio.timer = setInterval(tick, 25);
-  requestAnimationFrame(frame);
-}
-
-function pause() {
-  audio.pausedAt = position();
-  stopAudio();
-  draw();
-}
-
-function stopAudio() {
-  for (const el of Object.values(audio.els)) el.pause();
-  clearInterval(audio.timer);
-  audio.playing = false;
-  $("play").textContent = "▶︎ Play";
+  if (transport.playing) transport.pause();
+  else transport.play();
 }
 
 function seek(sec) {
-  const was = audio.playing;
-  if (was) pause();
-  audio.pausedAt = Math.max(0, sec);
-  if (was) play(); else draw();
-}
-
-function tick() {
-  if (!audio.playing) return;
-  const ref = refElement(), pos = position();
-  for (const el of Object.values(audio.els)) {  // keep the stems together
-    if (el !== ref && Math.abs(el.currentTime - pos) > 0.04) el.currentTime = pos;
-  }
-  scheduleClicks(pos);
+  transport.seek(sec);
+  if (!transport.playing) draw();
 }
 
 function frame() {
-  if (!audio.playing) return;
+  if (!transport.playing) return;
   const pos = position(), w = canvas.clientWidth;
   if (secToX(pos) > w * 0.75 || secToX(pos) < GUTTER) state.view.start = pos - (w - GUTTER) * 0.2 / state.view.pxPerSec;
   draw();
   requestAnimationFrame(frame);
-}
-
-function scheduleClicks(pos) {
-  // After a seek (or if the audio ever jumps), start scheduling from where it plays now.
-  if (Math.abs(audio.scheduledUntil - pos) > 0.5) audio.scheduledUntil = pos;
-  const until = pos + 0.12, from = Math.max(audio.scheduledUntil, pos - 0.02);
-  if (until <= from) return;
-  const at = (s) => audio.ctx.currentTime + (s - pos) / state.speed;
-  if (state.ticksOn) {
-    for (const n of notes()) {
-      const s = tickToSec(n.tick);
-      if (s >= from && s < until) click(n.lane, at(s));
-    }
-  }
-  if (state.metronomeOn) {
-    for (const b of state.song.beats) {
-      const s = tickToSec(b.tick);
-      if (s >= from && s < until) beep(b.down ? 1600 : 1100, at(s));
-    }
-  }
-  audio.scheduledUntil = until;
-}
-
-function click(lane, when) {
-  const ctx = audio.ctx;
-  when = Math.max(when, ctx.currentTime);
-  const gain = ctx.createGain();
-  gain.connect(audio.ticks);
-  const c = color(lane);
-  if (lane === "kick" || lane.endsWith("-tom")) {
-    const osc = ctx.createOscillator();
-    osc.frequency.setValueAtTime(lane === "kick" ? 110 : { yellow: 330, blue: 240, green: 170 }[c], when);
-    osc.frequency.exponentialRampToValueAtTime(lane === "kick" ? 45 : 90, when + 0.08);
-    gain.gain.setValueAtTime(0.5, when);
-    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.09);
-    osc.connect(gain);
-    osc.start(when); osc.stop(when + 0.1);
-    return;
-  }
-  const len = lane === "red" ? 0.06 : 0.03;
-  const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * len), ctx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  const filter = ctx.createBiquadFilter();
-  filter.type = lane === "red" ? "bandpass" : "highpass";
-  filter.frequency.value = lane === "red" ? 1800 : 7000;
-  gain.gain.value = lane === "red" ? 0.5 : 0.3;
-  src.connect(filter); filter.connect(gain);
-  src.start(when);
-}
-
-function beep(freq, when) {
-  when = Math.max(when, audio.ctx.currentTime);
-  const osc = audio.ctx.createOscillator(), gain = audio.ctx.createGain();
-  osc.type = "square";
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(0.08, when);
-  gain.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
-  osc.connect(gain); gain.connect(audio.metronome);
-  osc.start(when); osc.stop(when + 0.05);
 }
 
 // MARK: - Editing
@@ -690,7 +543,7 @@ function finishBox(box) {
     if (!state.song.editable) return status(state.song.reason, true);
     const tick = snapTick(secToTick(xToSec(box.x0)));
     const lane = DEFAULT_LANE[ROWS[row]];
-    commit(() => state.levels[state.level].push({ tick, lane }));
+    commit((d) => d.levels[state.level].push({ tick, lane }));
     state.selection = new Set([`${tick}:${lane}`]);
     return draw();
   }
@@ -709,8 +562,8 @@ function finishBox(box) {
 function moveSelection(delta, rows = 0) {
   if (!state.selection.size) return;
   const moved = new Set();
-  commit(() => {
-    for (const n of notes()) {
+  commit((d) => {
+    for (const n of d.levels[state.level]) {
       if (!state.selection.has(key(n))) continue;
       n.tick = Math.max(0, n.tick + delta);
       const row = Math.min(ROWS.length - 1, Math.max(0, ROWS.indexOf(rowOf(n.lane)) + rows));
@@ -724,20 +577,25 @@ function moveSelection(delta, rows = 0) {
 
 function deleteSelection() {
   if (!state.selection.size) return;
-  commit(() => {
-    state.levels[state.level] = notes().filter((n) => !state.selection.has(key(n)));
+  commit((d) => {
+    d.levels[state.level] = d.levels[state.level].filter((n) => !state.selection.has(key(n)));
   });
   state.selection.clear();
   draw();
 }
 
 function toggleCymbal() {
-  const targets = notes().filter((n) => state.selection.has(key(n)) && PADS.includes(color(n.lane)));
-  if (!targets.length) return;
-  commit(() => {
-    for (const n of targets) n.lane = color(n.lane) + (n.lane.endsWith("-cym") ? "-tom" : "-cym");
+  const targets = new Set(notes().filter((n) => state.selection.has(key(n)) && PADS.includes(color(n.lane))).map(key));
+  if (!targets.size) return;
+  const toggled = [];
+  commit((d) => {
+    for (const n of d.levels[state.level]) {
+      if (!targets.has(key(n))) continue;
+      n.lane = color(n.lane) + (n.lane.endsWith("-cym") ? "-tom" : "-cym");
+      toggled.push(key(n));
+    }
   });
-  state.selection = new Set(targets.map((n) => key(n)));
+  state.selection = new Set(toggled);
   draw();
 }
 
@@ -754,7 +612,7 @@ function paste() {
   if (!state.clipboard) return status("Clipboard is empty");
   const base = snapTick(secToTick(position()));
   const pasted = state.clipboard.map((c) => ({ tick: base + c.dt, lane: c.lane }));
-  commit(() => state.levels[state.level].push(...pasted));
+  commit((d) => d.levels[state.level].push(...pasted));
   state.selection = new Set(pasted.map(key));
   status(`Pasted ${pasted.length} notes at bar ${barOf(base)}`);
   draw();
@@ -768,8 +626,8 @@ function jumpUncertain(back = false) {
     ? [...low].reverse().find((n) => tickToSec(n.tick) < pos - 0.01) || low[low.length - 1]
     : low.find((n) => tickToSec(n.tick) > pos + 0.01) || low[0];
   const s = tickToSec(next.tick);
-  if (audio.playing) pause();
-  audio.pausedAt = s;
+  if (transport.playing) transport.pause();
+  transport.pausedAt = s;
   state.view.start = s - (canvas.clientWidth - GUTTER) * 0.4 / state.view.pxPerSec;
   state.selection = new Set([key(next)]);
   const i = low.indexOf(next) + 1;
@@ -796,7 +654,7 @@ window.addEventListener("keydown", (e) => {
   if (!state.song || ["SELECT", "INPUT"].includes(e.target.tagName)) return;
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
   if (e.code === "Space") { e.preventDefault(); play(); }
-  else if (mod && k === "z") { e.preventDefault(); e.shiftKey ? undo(state.redo, state.undo) : undo(state.undo, state.redo); }
+  else if (mod && k === "z") { e.preventDefault(); e.shiftKey ? state.doc.redo() : state.doc.undo(); }
   else if (mod && k === "s") { e.preventDefault(); save(e.shiftKey); }
   else if (mod && k === "c") { e.preventDefault(); copySelection(); }
   else if (mod && k === "x") { e.preventDefault(); copySelection(true); }
@@ -836,7 +694,7 @@ function renderLevels() {
   for (const l of LEVELS) {
     const b = document.createElement("button");
     b.className = l === state.level ? "active" : "";
-    b.innerHTML = `${l[0].toUpperCase() + l.slice(1)}<span class="count">${state.levels[l].length}</span>`;
+    b.innerHTML = `${l[0].toUpperCase() + l.slice(1)}<span class="count">${state.doc.levels[l].length}</span>`;
     b.onclick = () => setLevel(l);
     nav.appendChild(b);
   }
@@ -853,46 +711,12 @@ function setLevel(level) {
 
 // MARK: - Tempo map
 
-// Every tempo event is an anchor: a tick pinned to a time. Dragging a beat line pins its
-// tick to a new time and recomputes the tempo on both sides; notes keep their ticks, so
-// they move with the grid.
-
-const tempoKey = () => JSON.stringify([state.song.tempos.map((t) => [t.tick, t.bpm]), state.song.offset]);
-
-function retime(tempos) {
-  tempos[0].sec = 0;
-  for (let i = 1; i < tempos.length; i++) {
-    const a = tempos[i - 1];
-    tempos[i].sec = a.sec + (tempos[i].tick - a.tick) / state.song.ppq * 60 / a.bpm;
-  }
-  return tempos;
-}
-
-function placeBeat(base, tick, sec) {
-  // Pin `tick` to chart second `sec`; tempos stay between 20 and 400 BPM.
-  const ppq = state.song.ppq, t = base.map((x) => ({ ...x }));
-  let a = t.findIndex((x) => x.tick === tick);
-  if (a < 0) {
-    a = t.findLastIndex((x) => x.tick < tick) + 1;
-    t.splice(a, 0, { tick, bpm: t[a - 1].bpm, sec: 0 });
-    retime(t);
-  }
-  const prev = t[a - 1], next = t[a + 1];
-  const span = (from, to, bpm) => (to - from) / ppq * 60 / bpm;
-  let lo = prev.sec + span(prev.tick, tick, 400), hi = prev.sec + span(prev.tick, tick, 20);
-  if (next) {
-    lo = Math.max(lo, next.sec - span(tick, next.tick, 20));
-    hi = Math.min(hi, next.sec - span(tick, next.tick, 400));
-  }
-  sec = Math.min(hi, Math.max(lo, sec));
-  prev.bpm = (tick - prev.tick) / ppq * 60 / (sec - prev.sec);
-  if (next) t[a].bpm = (next.tick - tick) / ppq * 60 / (next.sec - sec);
-  return retime(t);
-}
+// Dragging a beat line pins its tick to a new time (tempomap.js); notes keep their ticks,
+// so they move with the grid.
 
 function beatNear(x, px = 6) {
   let best = null, dist = px;
-  for (const b of state.song.beats) {
+  for (const b of beats()) {
     const d = Math.abs(secToX(tickToSec(b.tick)) - x);
     if (d <= dist) { best = b; dist = d; }
   }
@@ -913,8 +737,7 @@ function nearestOnset(sec, within) {
 function startTempoDrag(x) {
   const b = beatNear(x);
   if (!b) return;
-  state.tempoDrag = { tick: b.tick, base: structuredClone(state.song.tempos), baseOffset: state.song.offset,
-                      before: snapshot(), moved: false };
+  state.tempoDrag = { tick: b.tick, base: state.doc.tempo, key: `tempo-drag:${Date.now()}`, moved: false };
 }
 
 function dragTempo(x, free) {
@@ -922,74 +745,43 @@ function dragTempo(x, free) {
   let target = xToSec(x);
   const hit = free ? null : nearestOnset(target, 0.04);
   if (hit !== null) target = hit;
-  if (d.tick === 0) {
-    state.song.offset = target;  // the first beat carries the whole chart: that is the offset
-  } else {
-    state.song.tempos = placeBeat(d.base, d.tick, target - state.song.offset);
-  }
+  commit((doc) => { doc.tempo = d.base.pin(d.tick, target); }, { coalesce: d.key });  // one undo step per drag
   d.moved = true;
-  const t = state.song.tempos, i = t.findIndex((x) => x.tick === d.tick);
-  status(d.tick === 0 ? `Offset ${Math.round(state.song.offset * 1000)} ms`
+  const t = state.doc.tempo.tempos, i = t.findIndex((x) => x.tick === d.tick);
+  status(d.tick === 0 ? `Offset ${Math.round(state.doc.tempo.offset * 1000)} ms`
     : `${t[i - 1].bpm.toFixed(2)} BPM before · ${t[i].bpm.toFixed(2)} BPM after${hit !== null ? " · on a hit" : ""}`);
   draw();
 }
 
 function endTempoDrag() {
-  const d = state.tempoDrag;
   state.tempoDrag = null;
-  if (!d.moved) return draw();
-  state.undo.push(d.before);
-  state.redo = [];
-  setDirty(true);
-  renderTempo();
-  draw();
-}
-
-function changeTempo(change) {
-  state.undo.push(snapshot());
-  state.redo = [];
-  change();
-  setDirty(true);
-  renderTempo();
   draw();
 }
 
 function removeAnchor(tick) {
-  changeTempo(() => {
-    const t = state.song.tempos.map((x) => ({ ...x })), a = t.findIndex((x) => x.tick === tick);
-    const prev = t[a - 1], next = t[a + 1];
-    if (next) prev.bpm = (next.tick - prev.tick) / state.song.ppq * 60 / (next.sec - prev.sec);
-    t.splice(a, 1);
-    state.song.tempos = retime(t);
-  });
+  commit((d) => { d.tempo = d.tempo.withoutAnchor(tick); });
   status("Anchor removed");
 }
 
 function setOffset(sec) {
   if (!Number.isFinite(sec)) return renderTempo();
-  changeTempo(() => { state.song.offset = Math.round(sec * 1000) / 1000; });
+  commit((d) => { d.tempo = d.tempo.withOffset(Math.round(sec * 1000) / 1000); });
 }
 
 function snapBeatToHit() {
   const pos = position();
   let beat = null;
-  for (const b of state.song.beats) {
+  for (const b of beats()) {
     if (!beat || Math.abs(tickToSec(b.tick) - pos) < Math.abs(tickToSec(beat.tick) - pos)) beat = b;
   }
   const hit = beat && nearestOnset(tickToSec(beat.tick), 0.08);
   if (hit === null || hit === undefined) return status("No drum hit within 80 ms of the nearest beat", true);
-  changeTempo(() => {
-    if (beat.tick === 0) state.song.offset = hit;
-    else state.song.tempos = placeBeat(state.song.tempos, beat.tick, hit - state.song.offset);
-  });
+  commit((d) => { d.tempo = d.tempo.pin(beat.tick, hit); });
   status(`Beat pinned to the hit (${Math.round((hit - pos) * 1000)} ms from the playhead)`);
 }
 
 function revertTempo() {
-  changeTempo(() => {
-    state.song.tempos = structuredClone(state.tempoOpened.tempos);
-    state.song.offset = state.tempoOpened.offset;
-  });
+  commit((d) => { d.tempo = state.tempoOpened; });
   status("Tempo map and offset as opened");
 }
 
@@ -1007,7 +799,7 @@ function renderTempo() {
   $("tempo-tools").hidden = !state.tempoMode;
   $("notes-tools").hidden = state.tempoMode;
   if (!state.tempoMode) return;
-  $("tempo-offset").value = Math.round(state.song.offset * 1000);
+  $("tempo-offset").value = Math.round(state.doc.tempo.offset * 1000);
   updateTempoReadout();
 }
 
@@ -1020,8 +812,8 @@ function updatePosition() {
 
 function updateTempoReadout() {
   const tick = Math.max(0, secToTick(position()));
-  const sig = [...state.song.signatures].reverse().find((s) => s.tick <= tick) || { num: 4, den: 4 };
-  const text = `${tempoAt(tick).bpm.toFixed(2)} BPM · ${sig.num}/${sig.den}`;
+  const tm = state.doc.tempo, sig = tm.signatureAt(tick);
+  const text = `${tm.at(tick).bpm.toFixed(2)} BPM · ${sig.num}/${sig.den}`;
   if ($("tempo-here").textContent !== text) $("tempo-here").textContent = text;
 }
 
@@ -1031,8 +823,8 @@ function drawTempo(w, t0, t1) {
   g.font = "11px -apple-system, sans-serif";
   g.textBaseline = "middle";
   let lastLabel = -Infinity;
-  for (const t of state.song.tempos) {
-    const x = secToX(t.sec + state.song.offset);
+  for (const t of state.doc.tempo.tempos) {
+    const x = secToX(t.sec + state.doc.tempo.offset);
     if (x < GUTTER - 10 || x > w + 10) continue;
     g.strokeStyle = "rgba(127,119,221,0.9)";
     g.lineWidth = 1.5;
@@ -1050,7 +842,7 @@ function drawTempo(w, t0, t1) {
   }
   if (!state.onsets.length) return;
   const y = RULER_H + 6;
-  for (const b of state.song.beats) {
+  for (const b of beats()) {
     const s = tickToSec(b.tick);
     if (s < t0 - 0.1 || s > t1 + 0.1) continue;
     const hit = nearestOnset(s, 0.06);
@@ -1097,8 +889,9 @@ function mergeOnsets(a, b) {
 // MARK: - Level settings
 
 const INSTRUMENTS = [["kick", "Kick"], ["snare", "Snare"], ["hihat", "Hi-hat"], ["toms", "Toms"], ["cymbals", "Cymbals"]];
-const expertPairs = () => state.levels.expert.map((n) => [n.tick, n.lane]);
-const tuneSettings = () => state.levelSettings[state.level];
+const expertPairs = () => state.doc.levels.expert.map((n) => [n.tick, n.lane]);
+const tempoPairs = () => state.doc.tempo.pairs();
+const tuneSettings = () => state.doc.settings[state.level];
 
 function renderTune() {
   const s = state.song && state.level !== "expert" && !state.tempoMode ? tuneSettings() : null;
@@ -1139,7 +932,7 @@ function renderTune() {
 }
 
 function renderTuneCount() {
-  const ex = state.levels.expert, mine = notes();
+  const ex = state.doc.levels.expert, mine = notes();
   if (!ex.length) return ($("tune-count").textContent = "");
   const span = Math.max(1, tickToSec(ex[ex.length - 1].tick) - tickToSec(ex[0].tick));
   $("tune-count").textContent = `${mine.length} notes · ${(mine.length / span).toFixed(1)}/s · ` +
@@ -1162,21 +955,17 @@ function setShare(inst, share) {
 
 let tuneTimer = null;
 
-function applyTune(s) {
+// Slider moves of one level within a second are one undo step, together with the notes
+// they generate; a preset is a step of its own.
+function applyTune(s, key = `tune:${state.level}`) {
   const level = state.level;
-  // Moves of the same level within a second are one undo step.
-  const coalesce = state.tuning && state.tuning.level === level && Date.now() - state.tuning.at < 1000;
-  if (!coalesce) { state.undo.push(snapshot()); state.redo = []; }
-  state.tuning = { level, at: Date.now() };
-  state.levelSettings = { ...state.levelSettings, [level]: s };
-  setDirty(true);
-  renderTune();
+  commit((d) => { d.settings[level] = s; }, { coalesce: key, within: 1000 });
   clearTimeout(tuneTimer);
   tuneTimer = setTimeout(async () => {
     try {
-      const data = await api("/api/reduce", { expert: expertPairs(), settings: { [level]: s } });
-      if (state.levelSettings[level] !== s) return;  // a newer edit or an undo came first
-      commit(() => { state.levels[level] = data[level].map(([tick, lane]) => ({ tick, lane })); }, true);
+      const data = await api("/api/reduce", { expert: expertPairs(), settings: { [level]: s }, tempos: tempoPairs() });
+      if (state.doc.settings[level] !== s) return;  // a newer edit or an undo came first
+      commit((d) => { d.levels[level] = data[level].map(([tick, lane]) => ({ tick, lane })); }, { coalesce: key });
       renderTuneCount();
     } catch (e) { status(e.message, true); }
   }, 120);
@@ -1187,15 +976,14 @@ function pickPreset(preset) {
   let s;
   if (preset === "custom") s = { ...structuredClone(current.preset === "clone-hero" ? state.song.presets.mpc[state.level] : current), preset: "custom" };
   else s = structuredClone(state.song.presets[preset][state.level]);
-  applyTune(s);
-  state.tuning = null;  // a preset is its own undo step
+  applyTune(s, `preset:${state.level}:${Date.now()}`);
 }
 
 function setSongControls(enabled) {
   for (const id of ["play", "mode-notes", "mode-tempo", "uncertain", "regen", "save", "save-menu", "undo", "redo", "speed", "snap", "ticks", "metronome"]) {
     $(id).disabled = !enabled;
   }
-  if (enabled) setDirty(state.dirty);
+  if (enabled) renderHistory();
 }
 
 async function api(path, body) {
@@ -1210,9 +998,9 @@ async function regenerate(which) {
   const names = levels.map((l) => l[0].toUpperCase() + l.slice(1)).join(", ").replace(/, (\w+)$/, " and $1");
   if (!confirm(`Generate ${names} from Expert? Hand edits on ${levels.length > 1 ? "those levels" : "that level"} are replaced.`)) return;
   try {
-    const data = await api("/api/reduce", { expert: expertPairs(), settings: state.levelSettings });
-    commit(() => {
-      for (const l of levels) state.levels[l] = data[l].map(([tick, lane]) => ({ tick, lane }));
+    const data = await api("/api/reduce", { expert: expertPairs(), settings: state.doc.settings, tempos: tempoPairs() });
+    commit((d) => {
+      for (const l of levels) d.levels[l] = data[l].map(([tick, lane]) => ({ tick, lane }));
     });
     status(`${names} regenerated from Expert`);
     showLevelsHint();
@@ -1239,14 +1027,7 @@ async function save(as = false) {
   // song's first save asks for the place either way.
   if (!state.song) return false;
   if (!state.song.editable) { status(state.song.reason, true); return false; }
-  const levels = {};
-  for (const l of LEVELS) levels[l] = state.levels[l].map((n) => [n.tick, n.lane]);
-  const body = { levels, settings: state.levelSettings };
-  const tempoChanged = tempoKey() !== state.tempoSaved;
-  if (tempoChanged) {
-    body.tempos = state.song.tempos.map((t) => [t.tick, t.bpm]);
-    body.offset = state.song.offset;
-  }
+  const body = state.doc.saveBody();
   const draft = state.song.draft;
   if (draft || as) {
     const settings = state.app.settings;
@@ -1266,13 +1047,12 @@ async function save(as = false) {
     if (draft || as) {
       state.song.draft = false;
       state.song.folder = data.folder;
-      state.app.settings[draft ? "out_dir" : "export_dir"] = body.dest;
+      state.app.settings = data.settings;
       status(draft ? `Saved the new song in ${data.folder}` : `Saved a copy in ${data.folder}; you're editing the copy now`);
     } else {
       status(`Saved ${data.file} in ${state.song.folder} (original kept as ${data.file}.orig)`);
     }
-    if (tempoChanged) state.tempoSaved = tempoKey();
-    setDirty(false);
+    state.doc.markSaved();
     return true;
   } catch (e) { status(e.message, true); return false; }
 }
@@ -1280,7 +1060,7 @@ async function save(as = false) {
 // MARK: - Opening and converting
 
 function okToLeave() {
-  return !state.dirty || confirm("Discard the unsaved changes in this song?");
+  return !state.doc?.dirty || confirm("Discard the unsaved changes in this song?");
 }
 
 async function pickPath(kind, start) {
@@ -1379,7 +1159,7 @@ async function refresh() {
   showGpu(state.app.gpu);
   if (state.app.job && state.app.job.state === "running") { showJob(state.app.job); pollJob(); }
   if (!state.app.song) {
-    state.song = null;
+    state.song = state.doc = null;
     $("start").hidden = false;
     $("song-title").textContent = "Trackyard";
     setSongControls(false);
@@ -1391,34 +1171,36 @@ async function refresh() {
   }
   $("start").hidden = true;
   state.song = await api("/api/song");
-  for (const l of LEVELS) {
-    state.levels[l] = dedupe((state.song.levels[l] || []).map(([tick, lane]) => ({ tick, lane })));
-  }
-  state.undo = []; state.redo = []; state.selection.clear(); state.tuning = null;
-  state.levelSettings = structuredClone(state.song.level_settings);
-  state.tempoOpened = { tempos: structuredClone(state.song.tempos), offset: state.song.offset };
-  state.tempoSaved = tempoKey();
+  state.doc = new SongDoc({
+    levels: state.song.levels, settings: structuredClone(state.song.level_settings),
+    tempo: new TempoMap(state.song.ppq, state.song.tempos, state.song.offset, state.song.signatures),
+    dirty: Boolean(state.song.draft),  // a new song isn't saved anywhere yet
+  });
+  state.doc.onChange(onDocChange);
+  state.selection.clear();
+  beatCache = { end: -1, list: [] };
+  state.tempoOpened = state.doc.tempo;
   state.onsets = [];
   setTempoMode(false);
-  state.dirty = Boolean(state.song.draft);  // a new song isn't saved anywhere yet
   state.level = "expert";
-  audio.pausedAt = 0;
+  transport.stop();
+  transport.pausedAt = 0;
   $("song-title").textContent = [state.song.artist, state.song.name].filter(Boolean).join(" – ");
   document.title = `${state.song.name} · Trackyard`;
   setSongControls(true);
   renderTune();
-  const first = state.levels.expert[0];
+  const first = state.doc.levels.expert[0];
   state.view.start = first ? Math.max(-0.5, tickToSec(first.tick) - 1) : -0.5;
   resize();
   await loadAudio();
 }
 
-window.addEventListener("beforeunload", (e) => { if (state.dirty) e.preventDefault(); });
+window.addEventListener("beforeunload", (e) => { if (state.doc?.dirty) e.preventDefault(); });
 new ResizeObserver(() => resize()).observe(document.querySelector("main"));  // also when the level panel shows or hides
 $("play").onclick = () => play();
 $("save").onclick = () => save();
-$("undo").onclick = () => undo(state.undo, state.redo);
-$("redo").onclick = () => undo(state.redo, state.undo);
+$("undo").onclick = () => state.doc.undo();
+$("redo").onclick = () => state.doc.redo();
 $("regen").onchange = (e) => {
   const which = e.target.value;
   e.target.value = "";
@@ -1441,15 +1223,15 @@ $("tune-preset").onchange = (e) => pickPreset(e.target.value);
 $("mode-notes").onclick = () => setTempoMode(false);
 $("mode-tempo").onclick = () => setTempoMode(true);
 $("tempo-offset").onchange = (e) => setOffset(Number(e.target.value) / 1000);
-$("offset-down").onclick = () => setOffset(state.song.offset - 0.005);
-$("offset-up").onclick = () => setOffset(state.song.offset + 0.005);
+$("offset-down").onclick = () => setOffset(state.doc.tempo.offset - 0.005);
+$("offset-up").onclick = () => setOffset(state.doc.tempo.offset + 0.005);
 $("snap-beat").onclick = () => snapBeatToHit();
 $("tempo-revert").onclick = () => revertTempo();
 canvas.addEventListener("dblclick", (e) => {
   if (!state.tempoMode) return;
   const { x } = pointer(e);
   const b = beatNear(x);
-  if (b && b.tick > 0 && state.song.tempos.some((t) => t.tick === b.tick)) removeAnchor(b.tick);
+  if (b && b.tick > 0 && state.doc.tempo.isAnchor(b.tick)) removeAnchor(b.tick);
 });
 $("tune-density").oninput = (e) => editTune((s) => { s.density = Number(e.target.value) / 100; });
 $("tune-finest").onchange = (e) => editTune((s) => { s.finest = Number(e.target.value); });
@@ -1459,7 +1241,7 @@ $("tune-notes").onchange = (e) => editTune((s) => { s.max_notes = Number(e.targe
 $("tune-gap").onchange = (e) => editTune((s) => { s.min_gap_ms = Math.max(0, Number(e.target.value) || 0); });
 $("speed").onchange = (e) => {
   state.speed = Number(e.target.value);
-  for (const el of Object.values(audio.els)) el.playbackRate = state.speed;
+  transport.setSpeed(state.speed);
 };
 $("ticks").onclick = (e) => { state.ticksOn = !state.ticksOn; e.target.classList.toggle("on", state.ticksOn); };
 $("metronome").onclick = (e) => { state.metronomeOn = !state.metronomeOn; e.target.classList.toggle("on", state.metronomeOn); };

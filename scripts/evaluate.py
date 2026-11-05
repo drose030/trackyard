@@ -29,11 +29,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from trackyard import analysis  # noqa: E402
+from trackyard import analysis, chartfile  # noqa: E402
 from trackyard import audio as audio_io  # noqa: E402
 from trackyard.chart import CLASSES, ReferenceChart, load_chart  # noqa: E402
 from trackyard.difficulty import LEVELS, all_levels, preset_settings  # noqa: E402
-from trackyard.export import write_midi  # noqa: E402
 from trackyard.metrics import EMPTY, OnsetScore, clip, match_onsets, merge_close, score_beats  # noqa: E402
 from trackyard.pipeline import Analysis, analyze, build_chart  # noqa: E402
 from trackyard.songfolder import SongFolder, find_songs  # noqa: E402
@@ -73,8 +72,9 @@ def chart_estimates(a: Analysis, tempo: str) -> tuple[ReferenceChart, object, Pa
     # The charter-like rules: the lower levels are compared with hand-made ones.
     levels = all_levels(chart.notes, chart.tempo_map.ppq, set(chart.fit.downbeat_ticks),
                         preset_settings("clone-hero"))
-    write_midi(out / "notes.mid", "auto", chart.tempo_map, chart.notes, chart.fit.beat_ticks, chart.fit.downbeat_ticks,
-               {k: v for k, v in levels.items() if k != "expert"})
+    chartfile.create(out, "auto", chart.tempo_map,
+                     {lvl: [(n.tick, n.lane) for n in notes] for lvl, notes in {**levels, "expert": chart.notes}.items()},
+                     chart.fit.beat_ticks, chart.fit.downbeat_ticks)
     return load_chart(out, {}), chart.fit, out
 
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .chart import TempoMap
+from .tempomap import TempoMap
 
 LANES = ("kick", "red", "yellow-cym", "yellow-tom", "blue-cym", "blue-tom", "green-cym", "green-tom")
 TOM_LANES = ("yellow-tom", "blue-tom", "green-tom")

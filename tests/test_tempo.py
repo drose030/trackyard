@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from trackyard.chart import TempoMap
+from trackyard.tempomap import TempoMap
 from trackyard.tempo import clean_beats, fit_tempo_map
 
 

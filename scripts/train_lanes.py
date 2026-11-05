@@ -27,7 +27,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from trackyard import audio as audio_io  # noqa: E402
-from trackyard.chart import read_notes  # noqa: E402
+from trackyard import chartfile  # noqa: E402
 from trackyard.lanes import CYMBAL_LANES, MODEL_PATH, TOM_LANES, Context, cymbal_features, export_gbc, tom_features, tom_pitch  # noqa: E402
 from trackyard.pipeline import analyze, detect_onsets  # noqa: E402
 from trackyard.songfolder import find_songs  # noqa: E402
@@ -66,11 +66,11 @@ def build(roots: list[Path], cache: Path) -> dict:
     songs = []
     for s in find_songs(roots):
         try:
-            ref_notes = read_notes(s.path, s.ini, "expert")
+            ref_chart = chartfile.read(s.path, s.ini)
         except Exception:
             continue
         d = cache / s.cache_key
-        if not ref_notes.notes or not (d / "adtof_demucs.npy").exists() or not (d / "beats_v2.json").exists():
+        if not ref_chart.levels["expert"] or not (d / "adtof_demucs.npy").exists() or not (d / "beats_v2.json").exists():
             continue
         a = analyze(d, lambda: None, "cpu", log=lambda m: None)
         onsets = detect_onsets(a)
@@ -78,8 +78,8 @@ def build(roots: list[Path], cache: Path) -> dict:
         ctx = Context(drums.mean(1), audio_io.SAMPLE_RATE, a.acts["demucs"],
                       {c: np.array(sorted(t for t, _ in v)) for c, v in onsets.items()},
                       np.array(a.beats), np.array(a.downbeats))
-        tm = ref_notes.tempo_map
-        ref = [(tm.seconds(t) + ref_notes.offset, lane) for t, lane in ref_notes.notes]
+        tm = ref_chart.tempo_map
+        ref = [(tm.seconds(t) + ref_chart.offset, lane) for t, lane in ref_chart.levels["expert"]]
         cy, tt = list(ctx.onsets["CY"]), list(ctx.onsets["TT"])
         base_c, base_t = old_rules(ctx, cy, tt)
         g = len(songs)

@@ -7,10 +7,12 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from trackyard.chart import TempoMap, load_chart
-from trackyard.export import SongInfo, write_ini, write_midi, write_ogg
+from trackyard import chartfile
+from trackyard.chart import load_chart
+from trackyard.export import SongInfo, write_ini, write_ogg
 from trackyard.notes import ChartNote
 from trackyard.songfolder import read_ini
+from trackyard.tempomap import TempoMap
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / "tools" / "beattrain-check"
@@ -34,7 +36,8 @@ DOWNS = [0, 1920, 3840, 5760, 7680, 9120]
 
 @pytest.fixture
 def song(tmp_path):
-    write_midi(tmp_path / "notes.mid", "Test", TM, NOTES, BEATS, DOWNS, LOWER)
+    levels = {lvl: [(n.tick, n.lane) for n in notes] for lvl, notes in {"expert": NOTES, **LOWER}.items()}
+    chartfile.create(tmp_path, "Test", TM, levels, BEATS, DOWNS)
     write_ini(tmp_path / "song.ini", SongInfo(name="Test", artist="Band", length_ms=10000), NOTES)
     return tmp_path
 

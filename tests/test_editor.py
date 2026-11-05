@@ -9,21 +9,18 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from trackyard.chart import TempoMap, read_notes
-from trackyard.chartedit import replace_drums_chart, save_drums
 import time
 
+from trackyard import chartfile
 from trackyard.editor.server import App, make_handler
-from trackyard.export import write_midi
-from trackyard.notes import ChartNote
+from trackyard.tempomap import TempoMap
 
 TM = TempoMap(480, [(0, 120.0)], [(0, 4, 4)])
 
 
 def midi_with_guitar(path):
-    notes = [ChartNote(480, "kick", 0.3, 0.5, "KD"), ChartNote(960, "yellow-tom", 0.9, 1.0, "TT")]
-    write_midi(path / "notes.mid", "Song", TM, notes, list(range(0, 4800, 480)), [0, 1920, 3840],
-               {"hard": notes[:1]})
+    chartfile.create(path, "Song", TM, {"expert": [(480, "kick"), (960, "yellow-tom")], "hard": [(480, "kick")]},
+                     list(range(0, 4800, 480)), [0, 1920, 3840])
     mid = mido.MidiFile(path / "notes.mid")
     guitar = mido.MidiTrack([mido.MetaMessage("track_name", name="PART GUITAR"),
                              mido.Message("note_on", note=96, velocity=100, time=480),
@@ -36,36 +33,6 @@ def midi_with_guitar(path):
     mid.save(path / "notes.mid")
     (path / "song.ini").write_text("[song]\nname = Song\nartist = Band\n")
     (path / "trackyard.json").write_text(json.dumps({"notes": [{"tick": 480, "lane": "kick", "confidence": 0.3}]}))
-
-
-def test_save_replaces_only_drum_notes(tmp_path):
-    midi_with_guitar(tmp_path)
-    save_drums(tmp_path, {"expert": [(240, "red"), (480, "blue-tom"), (960, "green-cym")], "hard": [(240, "red")]})
-    assert read_notes(tmp_path, {}, "expert").notes == [(240, "red"), (480, "blue-tom"), (960, "green-cym")]
-    assert read_notes(tmp_path, {}, "hard").notes == [(240, "red")]
-    assert read_notes(tmp_path, {}, "medium").notes == []
-    mid = mido.MidiFile(tmp_path / "notes.mid")
-    guitar = next(t for t in mid.tracks if t.name == "PART GUITAR")
-    assert [m.note for m in guitar if m.type == "note_on"] == [96]
-    drums = next(t for t in mid.tracks if t.name == "PART DRUMS")
-    assert 116 in [m.note for m in drums if m.type == "note_on"]
-    assert (tmp_path / "notes.mid.orig").exists()
-
-
-def test_save_chart_keeps_other_sections_and_valid_flags(tmp_path):
-    chart = tmp_path / "notes.chart"
-    chart.write_text(
-        "[Song]\n{\n  Resolution = 192\n}\n[SyncTrack]\n{\n  0 = B 120000\n}\n"
-        "[ExpertSingle]\n{\n  192 = N 0 0\n}\n"
-        "[ExpertDrums]\n{\n  0 = S 2 768\n  192 = N 1 0\n  192 = N 34 0\n  384 = N 2 0\n  384 = N 35 0\n}\n"
-    )
-    replace_drums_chart(chart, {"expert": [(192, "red"), (576, "yellow-cym")]})
-    text = chart.read_text()
-    assert "[ExpertSingle]\n{\n  192 = N 0 0\n}" in text
-    assert "0 = S 2 768" in text
-    assert "192 = N 34 0" in text  # red accent, red note still there
-    assert "384 = N 35 0" not in text  # yellow accent whose note is gone
-    assert read_notes(tmp_path, {"pro_drums": "True"}, "expert").notes == [(192, "red"), (576, "yellow-cym")]
 
 
 def make_song(folder):
@@ -152,6 +119,20 @@ def test_level_settings_drive_reduce_and_are_saved(server, tmp_path):
     assert song["level_settings"]["hard"] == {"preset": "clone-hero"}
     with pytest.raises(urllib.error.HTTPError) as e:
         post(server + "/api/reduce", {"expert": expert, "settings": {"expert": mpc["easy"]}})
+    assert e.value.code == 400
+
+
+def test_reduce_uses_the_tempo_map_being_edited(server):
+    # Clone Hero Medium keeps hats at least 0.25 s apart: eighths fit at 120 BPM, not at 160.
+    expert = [[t, "yellow-cym"] for t in range(0, 7680, 240)]
+    song = json.loads(get(server + "/api/song")[1])
+    tempos = [[t["tick"], t["bpm"]] for t in song["tempos"]]
+    as_saved = post(server + "/api/reduce", {"expert": expert, "tempos": tempos})
+    faster = post(server + "/api/reduce", {"expert": expert, "tempos": [[0, 160]]})
+    slower = post(server + "/api/reduce", {"expert": expert, "tempos": [[0, 60]]})
+    assert len(faster["medium"]) < len(as_saved["medium"]) <= len(slower["medium"]) == len(expert)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(server + "/api/reduce", {"expert": expert, "tempos": [[0, 0]]})
     assert e.value.code == 400
 
 

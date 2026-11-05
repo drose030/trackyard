@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .chart import TempoMap
+from .tempomap import TempoMap
 
 PPQ = 480
 

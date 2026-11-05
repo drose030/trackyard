@@ -1,6 +1,8 @@
 import pytest
 
-from trackyard.difficulty import Controls, all_levels, preset_settings, reduce, reduce_level, reduce_with
+from trackyard.tempomap import TempoMap
+from trackyard.difficulty import (Controls, all_levels, lower_levels, preset_settings, reduce, reduce_level,
+                                  reduce_with)
 from trackyard.notes import ChartNote
 
 PPQ = 480
@@ -67,6 +69,14 @@ def test_medium_hats_stay_playable_at_double_tempo():
     fast = [note(i * PPQ // 2, "yellow-cym", 0.8, "HH", sec_per_tick=60 / 160 / PPQ) for i in range(32)]
     hats = [n.time for n in reduce(fast, "medium", PPQ)]
     assert min(b - a for a, b in zip(hats, hats[1:])) >= 0.25 - 1e-9
+
+
+def test_lower_levels_time_notes_by_the_given_tempo_map():
+    hats = [(i * PPQ // 2, "yellow-cym") for i in range(32)]
+    medium = {lvl: {"preset": "clone-hero"} for lvl in ("hard", "medium", "easy")}
+    at = {bpm: lower_levels(hats, TempoMap(PPQ, [(0, bpm)], []), medium)["medium"] for bpm in (100, 160)}
+    assert len(at[160]) < len(at[100]) == len(hats)
+    assert set(at[160]) <= set(hats)
 
 
 def controls(**kw):

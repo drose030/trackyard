@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from .tempomap import TempoMap
 from .notes import ChartNote
 
 CYMBALS = ("yellow-cym", "blue-cym", "green-cym")
@@ -75,6 +76,32 @@ def group(lane: str) -> str:
     return "kick" if lane == "kick" else "cym" if lane in CYMBALS else "drums"
 
 
+def strength(tick: int, ppq: int, downbeats: set[int], triplets: bool = False) -> int:
+    """0 = downbeat, 1 = beat, 2 = eighth, 3 = sixteenth (or eighth triplet), 4 = finer."""
+    if tick in downbeats:
+        return 0
+    pos = tick % ppq
+    if pos == 0:
+        return 1
+    if pos * 2 == ppq:
+        return 2
+    return 3 if (pos * 4) % ppq == 0 or (triplets and (pos * 3) % ppq == 0) else 4
+
+
+def limit_chords(notes: list[ChartNote], max_hands: int, max_notes: int) -> list[ChartNote]:
+    """Per tick at most `max_hands` hand notes and `max_notes` in all, by KEEP_ORDER."""
+    by_tick: dict[int, list[ChartNote]] = {}
+    for n in notes:
+        by_tick.setdefault(n.tick, []).append(n)
+    out: list[ChartNote] = []
+    for tick in sorted(by_tick):
+        chord = sorted(by_tick[tick], key=lambda n: KEEP_ORDER[n.lane])
+        hands = [n for n in chord if n.lane != "kick"][:max_hands]
+        kick = [n for n in chord if n.lane == "kick"]
+        out += sorted(hands + kick, key=lambda n: KEEP_ORDER[n.lane])[:max_notes]
+    return out
+
+
 def reduce(notes: list[ChartNote], level: str, ppq: int, downbeats: set[int] | None = None) -> list[ChartNote]:
     rules = LEVELS[level]
     downbeats = downbeats or set()
@@ -83,40 +110,20 @@ def reduce(notes: list[ChartNote], level: str, ppq: int, downbeats: set[int] | N
         step = rules.grid[group(n.lane)] * ppq
         return abs(n.tick / step - round(n.tick / step)) < 1e-6
 
-    def strength(n: ChartNote) -> int:
-        """0 = downbeat, 1 = beat, 2 = eighth, 3 = sixteenth, 4 = anything finer."""
-        if n.tick in downbeats:
-            return 0
-        pos = n.tick % ppq
-        return 1 if pos == 0 else 2 if pos * 2 == ppq else 3 if (pos * 4) % ppq == 0 else 4
-
     candidates = [n for n in notes if on_grid(n)]
 
     # Thin each group (each cymbal lane on its own) to its minimum spacing, keeping
     # metrically strong notes first, then confident ones.
     kept: list[ChartNote] = []
     taken: dict[str, list[ChartNote]] = {}
-    for n in sorted(candidates, key=lambda n: (strength(n), -n.confidence, n.tick)):
+    for n in sorted(candidates, key=lambda n: (strength(n.tick, ppq, downbeats), -n.confidence, n.tick)):
         key = n.lane if n.lane in CYMBALS else group(n.lane)
         gap = rules.spacing[group(n.lane)] * ppq
         gap_s = rules.min_seconds.get(group(n.lane), 0.0)
         if all(abs(n.tick - t.tick) >= gap and abs(n.time - t.time) >= gap_s for t in taken.get(key, [])):
             taken.setdefault(key, []).append(n)
             kept.append(n)
-
-    by_tick: dict[int, list[ChartNote]] = {}
-    for n in kept:
-        by_tick.setdefault(n.tick, []).append(n)
-    out: list[ChartNote] = []
-    for tick in sorted(by_tick):
-        chord = sorted(by_tick[tick], key=lambda n: KEEP_ORDER[n.lane])
-        hands = [n for n in chord if n.lane != "kick"][: rules.max_hands]
-        kick = [n for n in chord if n.lane == "kick"]
-        chosen = sorted(hands + kick, key=lambda n: KEEP_ORDER[n.lane])[: rules.max_notes]
-        out += sorted(chosen, key=lambda n: (n.tick, n.lane))
-    return out
-
-
+    return sorted(limit_chords(kept, rules.max_hands, rules.max_notes), key=lambda n: (n.tick, n.lane))
 
 
 def all_levels(expert: list[ChartNote], ppq: int, downbeats: set[int] | None = None,
@@ -125,6 +132,17 @@ def all_levels(expert: list[ChartNote], ppq: int, downbeats: set[int] | None = N
     settings = settings or preset_settings(DEFAULT_PRESET)
     return {"expert": expert, **{lvl: reduce_level(expert, lvl, ppq, downbeats, settings.get(lvl))
                                  for lvl in LEVELS}}
+
+
+def lower_levels(expert: list[tuple[int, str]], tempo_map: TempoMap, settings: dict[str, dict] | None = None,
+                 confidence: dict[tuple[int, str], float] | None = None) -> dict[str, list[tuple[int, str]]]:
+    """Hard, Medium and Easy for Expert notes of a chart, timed and barred by `tempo_map`
+    (the one being edited, not necessarily the saved one)."""
+    confidence = confidence or {}
+    notes = [ChartNote(t, lane, confidence.get((t, lane), 1.0), tempo_map.seconds(t), "") for t, lane in expert]
+    beat_ticks, downs = tempo_map.beats(max([t for t, _ in expert] + [0]) + tempo_map.ppq)
+    levels = all_levels(notes, tempo_map.ppq, {t for t, d in zip(beat_ticks, downs) if d}, settings)
+    return {lvl: [(n.tick, n.lane) for n in levels[lvl]] for lvl in LEVELS}
 
 
 # MARK: - Adjustable controls
@@ -225,19 +243,8 @@ def reduce_with(notes: list[ChartNote], c: Controls, ppq: int, downbeats: set[in
         pos = n.tick % ppq
         return (pos * c.finest) % ppq == 0 or (triplet_grid is not None and (pos * triplet_grid) % ppq == 0)
 
-    def strength(n: ChartNote) -> int:
-        """0 = downbeat, 1 = beat, 2 = eighth, 3 = sixteenth or eighth triplet, 4 = finer."""
-        if n.tick in downbeats:
-            return 0
-        pos = n.tick % ppq
-        if pos == 0:
-            return 1
-        if pos * 2 == ppq:
-            return 2
-        return 3 if (pos * 4) % ppq == 0 or (pos * 3) % ppq == 0 else 4
-
     def priority(n: ChartNote) -> tuple:
-        return (strength(n), KEEP_ORDER[n.lane], -n.confidence, n.tick)
+        return (strength(n.tick, ppq, downbeats, triplets=True), KEEP_ORDER[n.lane], -n.confidence, n.tick)
 
     # 1. Each instrument keeps its share of Expert: strong positions first. Down to
     #    eighths, a class that only partly fits is thinned evenly across the song;
@@ -249,7 +256,7 @@ def reduce_with(notes: list[ChartNote], c: Controls, ppq: int, downbeats: set[in
         classes: dict[int, list[ChartNote]] = {}
         for n in mine:
             if allowed(n):
-                classes.setdefault(strength(n), []).append(n)
+                classes.setdefault(strength(n.tick, ppq, downbeats, triplets=True), []).append(n)
         for s in sorted(classes):
             group_notes = sorted(classes[s], key=lambda n: n.tick)
             if budget <= 0:
@@ -265,15 +272,7 @@ def reduce_with(notes: list[ChartNote], c: Controls, ppq: int, downbeats: set[in
                 budget = 0
 
     # 2. Chords: at most max_hands hand notes and max_notes in all per tick.
-    by_tick: dict[int, list[ChartNote]] = {}
-    for n in kept:
-        by_tick.setdefault(n.tick, []).append(n)
-    chords: list[ChartNote] = []
-    for tick in sorted(by_tick):
-        chord = sorted(by_tick[tick], key=lambda n: KEEP_ORDER[n.lane])
-        hands = [n for n in chord if n.lane != "kick"][: c.max_hands]
-        kick = [n for n in chord if n.lane == "kick"]
-        chords += sorted(hands + kick, key=lambda n: KEEP_ORDER[n.lane])[: c.max_notes]
+    chords = limit_chords(kept, c.max_hands, c.max_notes)
 
     # 3. Shortest gap, separately for the kick and for the hands, strongest notes first.
     gap = c.min_gap_ms / 1000

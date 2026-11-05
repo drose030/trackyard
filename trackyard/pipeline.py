@@ -20,15 +20,16 @@ from typing import Callable
 
 import numpy as np
 
-from . import analysis
+from . import analysis, chartfile
 from . import audio as audio_io
-from .chart import TempoMap
 from .difficulty import DEFAULT_PRESET, all_levels, preset_settings
-from .export import folder_name, read_tags, write_ini, write_midi, write_ogg, write_sidecar
+from .export import folder_name, read_tags, write_ini, write_ogg
 from .lanes import Context
 from .notes import ChartNote, build_notes
 from .progress import Progress, demucs_segments, model_downloads
+from .songfolder import songs_dir, write_sidecar
 from .tempo import TempoFit, fit_tempo_map
+from .tempomap import TempoMap
 
 # Kicks come from the Demucs stem unless it found far fewer than the full mix: Demucs
 # moves 808 kicks into its bass stem. Per song, because on real kits Demucs kicks are
@@ -179,9 +180,9 @@ def convert(src: Path, out_root: Path, cache: Path, device: str, tempo: str = "a
     folder.mkdir(parents=True, exist_ok=True)
     level_settings = preset_settings(levels_preset)
     levels = all_levels(chart.notes, chart.tempo_map.ppq, set(chart.fit.downbeat_ticks), level_settings) if lower else {}
-    write_midi(folder / "notes.mid", info.name, chart.tempo_map, chart.notes,
-               chart.fit.beat_ticks, chart.fit.downbeat_ticks,
-               {k: v for k, v in levels.items() if k != "expert"})
+    chartfile.create(folder, info.name, chart.tempo_map,
+                     {lvl: [(n.tick, n.lane) for n in notes] for lvl, notes in {**levels, "expert": chart.notes}.items()},
+                     chart.fit.beat_ticks, chart.fit.downbeat_ticks)
     write_ini(folder / "song.ini", info, chart.notes)
     if stems and a.drums_path:
         drums = audio_io.read(a.drums_path)
@@ -192,7 +193,7 @@ def convert(src: Path, out_root: Path, cache: Path, device: str, tempo: str = "a
         write_ogg(folder / "song.ogg", mix, audio_io.SAMPLE_RATE)
     if cover:
         (folder / f"album{cover[1]}").write_bytes(cover[0])
-    write_sidecar(folder / "trackyard.json", chart.notes, {
+    write_sidecar(folder, chart.notes, {
         "source": src.name, "tempo": tempo, "tempo_factor": chart.fit.factor, "bpm": round(chart.fit.bpm, 2),
         "triplets": triplets, "finest": finest, "learned_lanes": learned_lanes,
     }, level_settings if lower else None)
@@ -201,7 +202,7 @@ def convert(src: Path, out_root: Path, cache: Path, device: str, tempo: str = "a
 
 def copy_to_sd(folder: Path, sd_root: Path) -> Path:
     """Copy a song folder to `<sd>/BeatTrain/Songs/` (where Beat-Train on the MPC looks)."""
-    dest = sd_root / "BeatTrain" / "Songs" / folder.name
+    dest = songs_dir(sd_root, sd_card=True) / folder.name
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(folder, dest)

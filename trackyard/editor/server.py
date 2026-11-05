@@ -6,8 +6,8 @@ pipeline in a background thread).
 
     GET  /api/state     whether a song is open (and its folder), version, settings, running
                         conversion, picker support
-    GET  /api/song      song info, tempo map, notes of every level, confidences, stems, level
-                        settings and presets, draft flag
+    GET  /api/song      song info, tempo map, notes of every level, confidences, stems and
+                        their roles (drums, mix, crowd), level settings and presets, draft flag
     GET  /audio/<name>  one of the open song's stems (only names listed in /api/song), with
                         range requests
     POST /api/pick      {"kind": "audio"|"folder"|"save", "start"} → native macOS dialog;
@@ -18,7 +18,8 @@ pipeline in a background thread).
     POST /api/gpu       download PyTorch for the NVIDIA GPU (the Windows app); progress in
                         /api/state "gpu"
     POST /api/settings  {"export_dir", "hide_hint"} → remember the Save-as folder and dismissed hints
-    POST /api/reduce    {"expert": [[tick, lane], …], "settings"} → generated hard/medium/easy
+    POST /api/reduce    {"expert": [[tick, lane], …], "settings", "tempos"} → generated
+                        hard/medium/easy, timed by the tempo map being edited if sent
     POST /api/save      {"levels": {"expert": [[tick, lane], …], …}, "settings", "tempos", "offset",
                         "dest", "overwrite"} → writes the chart, the level settings
                         (trackyard.json) and, when sent, the tempo map ([[tick, bpm], …]) and
@@ -26,7 +27,8 @@ pipeline in a background thread).
                         dest/<song folder> (or dest/BeatTrain/Songs/…) on its first save
     POST /api/save_as   same body, "dest" required → copy the song folder into dest (or
                         dest/BeatTrain/Songs on an SD card), save the edits there and keep
-                        editing the copy; the original stays as it was
+                        editing the copy; the original stays as it was. Both return the
+                        editor settings when they changed the remembered folder
 
 Errors come back as {"error": …} with 400 or 404; an existing target without
 "overwrite" gives 409 {"error": "exists", "target"}.
@@ -50,83 +52,75 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-from ..chart import DIFFICULTIES, read_notes
-from ..chartedit import save_drums, save_tempo
-from ..difficulty import PRESETS, all_levels, clean_settings, preset_settings
-from ..notes import ChartNote
-from ..songfolder import AUDIO_EXTENSIONS, read_ini
+from .. import chartfile
+from ..difficulty import PRESETS, clean_settings, lower_levels, preset_settings
+from ..songfolder import SongFolder, songs_dir
+from ..tempomap import TempoMap
 
 STATIC = Path(__file__).parent / "static"
-LANES = ("kick", "red", "yellow-cym", "yellow-tom", "blue-cym", "blue-tom", "green-cym", "green-tom")
 SETTINGS = Path.home() / ".trackyard" / "editor.json"
+
+
+def clean_tempos(tempos: list[list]) -> list[tuple[int, float]]:
+    """A tempo map from the editor: [[tick, bpm], …], starting at tick 0."""
+    out = [(int(t), float(bpm)) for t, bpm in tempos]
+    ticks = [t for t, _ in out]
+    if not out or ticks[0] != 0 or ticks != sorted(set(ticks)) or not all(10 <= b <= 1000 for _, b in out):
+        raise ValueError("bad tempo map")
+    return out
 
 
 class Song:
     """One song folder opened in the editor."""
 
     def __init__(self, folder: Path):
-        self.folder = folder.resolve()
-        if not (self.folder / "song.ini").exists():
-            raise FileNotFoundError(f"no song.ini in {self.folder}")
-        if not ((self.folder / "notes.mid").exists() or (self.folder / "notes.chart").exists()):
-            raise FileNotFoundError(f"no notes.mid or notes.chart in {self.folder}")
+        self.folder = SongFolder.open(folder).path
         self.lock = threading.Lock()
         self.load()
 
     def load(self) -> None:
-        self.ini = read_ini(self.folder / "song.ini")
-        self.levels: dict[str, list[tuple[int, str]]] = {}
-        expert = read_notes(self.folder, self.ini, "expert")
-        self.tempo_map, self.offset, self.five_lane = expert.tempo_map, expert.offset, expert.five_lane
-        for level in DIFFICULTIES:
-            try:
-                self.levels[level] = read_notes(self.folder, self.ini, level).notes
-            except Exception:
-                self.levels[level] = []
-        data = self._read_sidecar()
-        self.confidence = {f"{n['tick']}:{n['lane']}": n["confidence"] for n in data.get("notes", [])}
+        song = SongFolder.open(self.folder)
+        self.ini = song.ini
+        chart = chartfile.read(self.folder, self.ini)
+        self.levels = chart.levels
+        self.tempo_map, self.offset, self.five_lane = chart.tempo_map, chart.offset, chart.five_lane
+        self.audio = song.audio()
+        self.confidence = song.confidence()
         # How Hard/Medium/Easy are regenerated. Songs without settings (hand-made charts,
         # older conversions) got their lower levels from charter-like rules.
-        self.level_settings = {**preset_settings("clone-hero"), **clean_settings(data.get("levels", {}))}
-
-    def _read_sidecar(self) -> dict:
-        sidecar = self.folder / "trackyard.json"
-        return json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else {}
+        self.level_settings = {**preset_settings("clone-hero"), **clean_settings(song.sidecar().get("levels", {}))}
 
     def stems(self) -> list[str]:
-        return sorted(f.name for f in self.folder.iterdir()
-                      if f.suffix.lower() in AUDIO_EXTENSIONS and f.stem.lower() != "preview")
+        return list(self.audio)
 
     def info(self) -> dict:
         tm = self.tempo_map
-        last = max([t for notes in self.levels.values() for t, _ in notes] + [0])
-        beat_ticks, downs = tm.beats(last + 8 * tm.ppq)
         return {
             "folder": str(self.folder),
             "name": self.ini.get("name", self.folder.name),
             "artist": self.ini.get("artist", ""),
             "ppq": tm.ppq,
             "offset": self.offset,
-            "tempos": [{"tick": t, "bpm": bpm, "sec": tm.seconds(t)} for t, bpm in tm.tempos],
+            "tempos": [{"tick": t, "bpm": bpm} for t, bpm in tm.tempos],
             "signatures": [{"tick": t, "num": n, "den": d} for t, n, d in tm.signatures],
-            "beats": [{"tick": t, "down": d} for t, d in zip(beat_ticks, downs)],
             "levels": {lvl: [[t, lane] for t, lane in notes] for lvl, notes in self.levels.items()},
-            "confidence": self.confidence,
+            "confidence": {f"{t}:{lane}": c for (t, lane), c in self.confidence.items()},
             "stems": self.stems(),
+            "stem_roles": self.audio,
             "level_settings": self.level_settings,
             "presets": {p: preset_settings(p) for p in PRESETS},
             "editable": not self.five_lane,
             "reason": "5-lane charts can't be saved yet" if self.five_lane else "",
         }
 
-    def reduce(self, expert: list[list], settings: dict | None = None) -> dict:
+    def reduce(self, expert: list[list], settings: dict | None = None, tempos: list[list] | None = None) -> dict:
+        """Hard/Medium/Easy from Expert; `tempos` is the tempo map being edited, if it changed."""
         tm = self.tempo_map
-        notes = [ChartNote(int(t), lane, self.confidence.get(f"{t}:{lane}", 1.0), tm.seconds(int(t)), "")
-                 for t, lane in expert]
-        beat_ticks, downs = tm.beats(max([n.tick for n in notes] + [0]) + tm.ppq)
+        if tempos is not None:
+            tm = TempoMap(tm.ppq, clean_tempos(tempos), list(tm.signatures))
         settings = {**self.level_settings, **clean_settings(settings or {})}
-        levels = all_levels(notes, tm.ppq, {t for t, d in zip(beat_ticks, downs) if d}, settings)
-        return {lvl: [[n.tick, n.lane] for n in levels[lvl]] for lvl in ("hard", "medium", "easy")}
+        levels = lower_levels([(int(t), str(lane)) for t, lane in expert], tm, settings, self.confidence)
+        return {lvl: [[t, lane] for t, lane in notes] for lvl, notes in levels.items()}
 
     def save(self, levels: dict[str, list[list]], settings: dict | None = None,
              tempos: list[list] | None = None, offset: float | None = None, keep_original: bool = True) -> str:
@@ -134,29 +128,16 @@ class Song:
         if self.five_lane:
             raise ValueError(self.info()["reason"])
         if tempos is not None:
-            tempos = [(int(t), float(bpm)) for t, bpm in tempos]
-            ticks = [t for t, _ in tempos]
-            if not tempos or ticks[0] != 0 or ticks != sorted(set(ticks)) or not all(10 <= b <= 1000 for _, b in tempos):
-                raise ValueError("bad tempo map")
+            tempos = clean_tempos(tempos)
         if offset is not None and not -60 < float(offset) < 60:
             raise ValueError("bad offset")
-        clean: dict[str, list[tuple[int, str]]] = {}
-        for lvl, notes in levels.items():
-            if lvl not in DIFFICULTIES:
-                raise ValueError(f"unknown difficulty {lvl!r}")
-            pairs = {(int(t), str(lane)) for t, lane in notes}
-            if any(lane not in LANES or t < 0 for t, lane in pairs):
-                raise ValueError("bad note in request")
-            clean[lvl] = sorted(pairs)
+        clean = {lvl: sorted({(int(t), str(lane)) for t, lane in notes}) for lvl, notes in levels.items()}
+        chartfile.check(clean)
         level_settings = clean_settings(settings) if settings else None
         with self.lock:
-            path = save_drums(self.folder, clean, keep_original)
-            if tempos is not None or offset is not None:
-                save_tempo(self.folder, tempos, None if offset is None else float(offset), keep_original)
+            path = chartfile.save(self.folder, clean, tempos, None if offset is None else float(offset), keep_original)
             if level_settings:
-                data = {"trackyard": 1, **self._read_sidecar()}
-                data["levels"] = {**data.get("levels", {}), **level_settings}
-                (self.folder / "trackyard.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
+                SongFolder.open(self.folder).save_level_settings(level_settings)
             self.load()
         return path.name
 
@@ -327,7 +308,7 @@ class App:
             song.folder = target
             song.load()
         self.save_settings(out_dir=str(dest.resolve()))
-        return {"file": file, "folder": str(target)}
+        return {"file": file, "folder": str(target), "settings": self.settings}
 
     def save_as(self, levels: dict[str, list[list]], dest: Path, overwrite: bool,
                 settings: dict | None = None, tempos: list[list] | None = None, offset: float | None = None) -> dict:
@@ -347,14 +328,13 @@ class App:
         with self.lock:
             self.song = copy  # same stem names: the UI keeps its audio
         self.save_settings(export_dir=str(dest.resolve()))
-        return {"file": file, "folder": str(target)}
+        return {"file": file, "folder": str(target), "settings": self.settings}
 
     def _target(self, dest: Path) -> Path:
-        """Where the song folder goes in `dest`: on an SD card with BeatTrain/Songs, in there."""
+        """Where the song folder goes in `dest` (on an SD card: into BeatTrain/Songs)."""
         if not dest.is_dir():
             raise ValueError(f"not a folder: {dest}")
-        songs_dir = dest / "BeatTrain" / "Songs"
-        return ((songs_dir if songs_dir.is_dir() else dest) / self.song.folder.name).resolve()
+        return (songs_dir(dest) / self.song.folder.name).resolve()
 
 
 def pick(kind: str, start: str | None = None) -> str | None:
@@ -467,7 +447,7 @@ def make_handler(app: App, picker=pick):
                 if not app.song:
                     return self._json({"error": "no song open"}, HTTPStatus.BAD_REQUEST)
                 if self.path == "/api/reduce":
-                    return self._json(app.song.reduce(body["expert"], body.get("settings")))
+                    return self._json(app.song.reduce(body["expert"], body.get("settings"), body.get("tempos")))
                 if self.path in ("/api/save", "/api/save_as"):
                     dest = Path(body["dest"]).expanduser() if body.get("dest") else None
                     if self.path == "/api/save_as" and dest is None:

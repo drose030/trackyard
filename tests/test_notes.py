@@ -1,6 +1,6 @@
 import numpy as np
 
-from trackyard.chart import TempoMap
+from trackyard.tempomap import TempoMap
 from trackyard.notes import ChartNote, _resolve, build_notes, snap_ticks
 
 TM = TempoMap(480, [(0, 120.0)], [])  # one beat = 0.5 s
