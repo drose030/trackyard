@@ -44,7 +44,7 @@ jobs:
       - name: Version from the tag
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: desktop
-        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
 
       # bundle, smoke test (converts a generated drum loop), installer
       - name: Build
