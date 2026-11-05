@@ -15,6 +15,8 @@ pipeline in a background thread).
     POST /api/open      {"folder"} → open a song folder
     POST /api/convert   {"audio"} → convert into a draft in the background, then open it
     GET  /api/job       progress of that conversion
+    POST /api/gpu       download PyTorch for the NVIDIA GPU (the Windows app); progress in
+                        /api/state "gpu"
     POST /api/settings  {"export_dir", "hide_hint"} → remember the Save-as folder and dismissed hints
     POST /api/reduce    {"expert": [[tick, lane], …], "settings"} → generated hard/medium/easy
     POST /api/save      {"levels": {"expert": [[tick, lane], …], …}, "settings", "tempos", "offset",
@@ -159,14 +161,14 @@ class Song:
         return path.name
 
 
-class Job:
-    """One background conversion."""
+DEVICES = {"mps": "Apple GPU", "cuda": "NVIDIA GPU", "cpu": "CPU"}
 
-    def __init__(self, audio: Path, out_dir: Path):
-        self.audio, self.out_dir = audio, out_dir
+
+class Task:
+    """Something slow in the background: its step and, where known, how far it is."""
+
+    def __init__(self):
         self.state = "running"
-        self.log: list[str] = []
-        self.folder: Path | None = None
         self.error = ""
         self.step, self.fraction = "Starting", None
         self.started = time.time()
@@ -175,16 +177,29 @@ class Job:
         self.step, self.fraction = step, fraction
 
     def info(self) -> dict:
-        return {"audio": str(self.audio), "out_dir": str(self.out_dir), "state": self.state,
-                "log": self.log[-12:], "folder": str(self.folder) if self.folder else None, "error": self.error,
-                "step": self.step, "fraction": self.fraction, "elapsed": round(time.time() - self.started)}
+        return {"state": self.state, "error": self.error, "step": self.step, "fraction": self.fraction,
+                "elapsed": round(time.time() - self.started)}
+
+
+class Job(Task):
+    """One background conversion."""
+
+    def __init__(self, audio: Path, out_dir: Path):
+        super().__init__()
+        self.audio, self.out_dir = audio, out_dir
+        self.log: list[str] = []
+        self.folder: Path | None = None
+
+    def info(self) -> dict:
+        return {**super().info(), "audio": str(self.audio), "out_dir": str(self.out_dir), "log": self.log[-12:],
+                "folder": str(self.folder) if self.folder else None}
 
 
 class App:
     """What the editor has open, plus settings and the running conversion."""
 
     def __init__(self, folder: Path | None, cache: Path, device: str | None = None,
-                 settings_path: Path = SETTINGS, converter=None):
+                 settings_path: Path = SETTINGS, converter=None, gpu_dir: Path | None = None):
         self.song: Song | None = Song(folder) if folder else None
         self.cache = cache.resolve()
         self.drafts = self.cache / "drafts"
@@ -196,6 +211,9 @@ class App:
         self.job: Job | None = None
         self.version = 0  # bumps on every newly opened song, so the UI reloads its audio
         self.converter = converter  # injectable for tests
+        self.gpu_dir = gpu_dir
+        self.gpu_task: Task | None = None
+        self._nvidia: dict | None = None
         self.lock = threading.Lock()
 
     def save_settings(self, **values) -> None:
@@ -206,7 +224,41 @@ class App:
     def state(self) -> dict:
         return {"song": bool(self.song), "version": self.version, "settings": self.settings,
                 "job": self.job.info() if self.job else None, "native_picker": sys.platform == "darwin",
-                "folder": str(self.song.folder) if self.song else None}
+                "folder": str(self.song.folder) if self.song else None, "gpu": self.gpu()}
+
+    def gpu(self) -> dict | None:
+        """NVIDIA GPU support, when the app can download it and there is a GPU."""
+        if not self.gpu_dir:
+            return None
+        from .. import gpu
+
+        if self._nvidia is None:
+            self._nvidia = gpu.nvidia() or {}
+        if not self._nvidia:
+            return None
+        return {"name": self._nvidia["name"], "installed": gpu.installed(self.gpu_dir),
+                "active": gpu.active(self.gpu_dir), "task": self.gpu_task.info() if self.gpu_task else None}
+
+    def install_gpu(self) -> dict:
+        if not self.gpu_dir:
+            raise ValueError("GPU support is only in the desktop app")
+        with self.lock:
+            if self.gpu_task and self.gpu_task.state == "running":
+                raise ValueError("already downloading")
+            task = self.gpu_task = Task()
+
+        def run() -> None:
+            from .. import gpu
+
+            try:
+                gpu.install(self.gpu_dir, task.set_progress)
+                task.state = "done"
+            except Exception as e:  # shown in the start screen
+                task.error = str(e)
+                task.state = "failed"
+
+        threading.Thread(target=run, daemon=True).start()
+        return task.info()
 
     def open(self, folder: Path) -> dict:
         song = Song(folder)
@@ -242,7 +294,7 @@ class App:
                 from ..progress import Progress
 
                 device = self.device or analysis.best_device()
-                job.log.append(f"Analysing on the {'Apple GPU' if device == 'mps' else device.upper()}")
+                job.log.append(f"Analysing on the {DEVICES.get(device, device)}")
 
                 def convert(src, out_root, log):
                     return pipeline_convert(src, out_root, self.cache, device, log=log,
@@ -403,6 +455,8 @@ def make_handler(app: App, picker=pick):
                     return self._json(app.open(Path(body["folder"]).expanduser()))
                 if self.path == "/api/convert":
                     return self._json(app.convert(Path(body["audio"]).expanduser()).info())
+                if self.path == "/api/gpu":
+                    return self._json(app.install_gpu())
                 if self.path == "/api/settings":
                     values = {k: str(Path(v).expanduser()) for k, v in body.items()
                               if k == "export_dir" and v}
@@ -442,8 +496,8 @@ def exit_with_parent() -> None:
 
 
 def serve(folder: Path | None, port: int = 8765, open_browser: bool = True, cache: Path = Path("cache"),
-          exit_with_stdin: bool = False) -> None:
-    app = App(folder, cache)
+          exit_with_stdin: bool = False, gpu_dir: Path | None = None) -> None:
+    app = App(folder, cache, gpu_dir=gpu_dir)
     if exit_with_stdin:
         exit_with_parent()
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))

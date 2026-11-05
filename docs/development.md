@@ -124,6 +124,16 @@ npm run dist        # bundle Python, smoke test, build the installer for this OS
 
 ffmpeg comes from the `imageio-ffmpeg` package when there's none on the `PATH`.
 
+**NVIDIA GPUs (Windows):** the installer only has PyTorch for the CPU. When
+`nvidia-smi` finds a GPU, the start screen offers GPU support: `trackyard/gpu.py`
+picks the newest CUDA build of the bundled PyTorch version that the GPU and driver can
+run, downloads that wheel from PyTorch's index (the CUDA libraries are inside it),
+unpacks it to `<data>/gpu/site`, checks in a separate Python that it sees the GPU,
+and puts it first on `sys.path`. The editor server only loads PyTorch when a
+conversion starts, so this works without a restart unless a song was converted
+before. After an app update with another PyTorch version, the old download is
+ignored and the start screen offers a new one.
+
 **Releases:** `.github/workflows/desktop.yml` builds both installers on GitHub. Pushing
 a tag `v<version>` sets that version, builds, and attaches the installers to the tag's
 release (created if missing). "Run workflow" in the Actions tab builds without a

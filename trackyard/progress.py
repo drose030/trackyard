@@ -29,6 +29,25 @@ class Progress:
         self.report(self.step, value)
 
 
+def fetch(url: str, dst: Path, sha256_prefix: str | None, on_bytes: Callable[[int, int], None]) -> None:
+    """Download `url` to `dst` through a .partial file, reporting (done, total) bytes."""
+    request = urllib.request.Request(url, headers={"User-Agent": "trackyard"})
+    partial = dst.with_name(dst.name + ".partial")
+    sha = hashlib.sha256()
+    with urllib.request.urlopen(request) as response, open(partial, "wb") as out:
+        total = int(response.headers.get("Content-Length") or 0)
+        done = 0
+        while chunk := response.read(1 << 20):
+            out.write(chunk)
+            sha.update(chunk)
+            done += len(chunk)
+            on_bytes(done, total)
+    if sha256_prefix and not sha.hexdigest().startswith(sha256_prefix):
+        partial.unlink()
+        raise RuntimeError(f"download of {dst.name} is corrupt; try again")
+    shutil.move(str(partial), dst)
+
+
 @contextmanager
 def model_downloads(progress: Progress) -> Iterator[None]:
     """torch.hub downloads (Demucs, Beat This!) report their bytes instead of a console bar."""
@@ -37,24 +56,9 @@ def model_downloads(progress: Progress) -> Iterator[None]:
     original = torch.hub.download_url_to_file
 
     def download(url: str, dst: str, hash_prefix: str | None = None, progress_bar: bool = True, **_) -> None:
-        name = Path(dst).name
         model = "Beat This!" if "Beat This" in progress.step else "Demucs" if "Demucs" in progress.step else "a"
-        request = urllib.request.Request(url, headers={"User-Agent": "trackyard"})
-        partial = Path(dst + ".partial")
-        sha = hashlib.sha256()
-        with urllib.request.urlopen(request) as response, open(partial, "wb") as out:
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
-            while chunk := response.read(1 << 20):
-                out.write(chunk)
-                sha.update(chunk)
-                done += len(chunk)
-                progress.report(f"Downloading the {model} model, first time only ({total / 1e6:.0f} MB)",
-                                done / total if total else None)
-        if hash_prefix and not sha.hexdigest().startswith(hash_prefix):
-            partial.unlink()
-            raise RuntimeError(f"download of {name} is corrupt; try again")
-        shutil.move(str(partial), dst)
+        fetch(url, Path(dst), hash_prefix, lambda done, total: progress.report(
+            f"Downloading the {model} model, first time only ({total / 1e6:.0f} MB)", done / total if total else None))
         progress.fraction(None)
 
     torch.hub.download_url_to_file = download

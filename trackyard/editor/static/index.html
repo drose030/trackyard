@@ -126,6 +126,17 @@
           <button id="start-folder">Open song…</button>
         </div>
         <p class="out">You choose where a new song goes when you save it.</p>
+        <div id="gpu" class="gpu" hidden>
+          <p id="gpu-text"></p>
+          <div id="gpu-progress" class="job-progress" hidden>
+            <div class="job-step"><span id="gpu-step"></span><span id="gpu-time"></span></div>
+            <div class="job-track"><div id="gpu-bar"></div></div>
+          </div>
+          <div class="actions">
+            <button id="gpu-install" hidden>Download GPU support (2 GB)</button>
+            <button id="gpu-restart" hidden>Restart Trackyard</button>
+          </div>
+        </div>
       </div>
     </section>
     <section id="hint" class="overlay" hidden>

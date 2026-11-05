@@ -42,7 +42,10 @@ warns the first time:
   **System Settings → Privacy & Security** and click **Open Anyway**.
 - **Windows** (64-bit): run `Trackyard-Setup-<version>.exe`; it installs for your user,
   without admin rights. If Windows says it protected your PC, click **More info → Run
-  anyway**. Conversions run on the CPU, which is slower than on a Mac.
+  anyway**. Conversions run on the CPU, about 3–4 minutes per song. With an NVIDIA
+  graphics card (GeForce GTX 16 / RTX 20 or newer, driver 580 or newer), the start
+  screen offers **Download GPU support**: a one-time 2 GB download, after which songs
+  convert on the graphics card.
 
 To build the app yourself, see [docs/development.md](docs/development.md#the-desktop-app).
 

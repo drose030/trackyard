@@ -1315,19 +1315,22 @@ async function openFolder() {
   } catch (e) { status(e.message, true); }
 }
 
+function showProgress(prefix, task) {
+  $(`${prefix}-progress`).hidden = task.state !== "running";
+  if (task.state !== "running") return;
+  const known = typeof task.fraction === "number";
+  $(`${prefix}-step`).textContent = known ? `${task.step}… ${Math.round(task.fraction * 100)} %` : `${task.step}…`;
+  $(`${prefix}-time`).textContent = `${Math.floor(task.elapsed / 60)}:${String(task.elapsed % 60).padStart(2, "0")}`;
+  $(`${prefix}-bar`).classList.toggle("busy", !known);
+  $(`${prefix}-bar`).style.width = known ? `${Math.round(task.fraction * 100)}%` : "";
+}
+
 function showJob(job) {
   $("job").hidden = false;
   $("start").hidden = true;
   const name = job.audio.split(/[\\/]/).pop();
   $("job-title").textContent = job.state === "failed" ? "Conversion failed" : job.state === "done" ? "Done" : `Converting ${name}`;
-  $("job-progress").hidden = job.state !== "running";
-  if (job.state === "running") {
-    const known = typeof job.fraction === "number";
-    $("job-step").textContent = known ? `${job.step}… ${Math.round(job.fraction * 100)} %` : `${job.step}…`;
-    $("job-time").textContent = `${Math.floor(job.elapsed / 60)}:${String(job.elapsed % 60).padStart(2, "0")}`;
-    $("job-bar").classList.toggle("busy", !known);
-    $("job-bar").style.width = known ? `${Math.round(job.fraction * 100)}%` : "";
-  }
+  showProgress("job", job);
   $("job-log").textContent = [...job.log, job.error].filter(Boolean).join("\n");
   $("job-close").hidden = job.state === "running";
 }
@@ -1345,8 +1348,35 @@ async function pollJob() {
   }
 }
 
+// NVIDIA GPU support (Windows app): offer the download, show its progress, then use it.
+let gpuTimer = null;
+function showGpu(gpu) {
+  $("gpu").hidden = !gpu;
+  if (!gpu) return;
+  const task = gpu.task;
+  const running = task && task.state === "running";
+  const restart = gpu.installed && !gpu.active;
+  $("gpu-text").textContent =
+    gpu.active ? `Songs convert on the GPU (${gpu.name}).`
+    : restart ? "GPU support is ready. Restart Trackyard to use it."
+    : running ? `Getting GPU support for the ${gpu.name}. You can keep working; this takes a while.`
+    : task && task.state === "failed" ? `GPU support failed: ${task.error}`
+    : `Your ${gpu.name} can convert songs several times faster than the CPU. It needs a one-time download.`;
+  showProgress("gpu", task || { state: "" });
+  $("gpu-install").hidden = gpu.active || restart || running;
+  $("gpu-install").textContent = task && task.state === "failed" ? "Try again" : "Download GPU support (2 GB)";
+  $("gpu-restart").hidden = !restart || !window.trackyardDesktop;
+  clearTimeout(gpuTimer);
+  if (running) gpuTimer = setTimeout(pollGpu, 1000);
+}
+
+async function pollGpu() {
+  try { showGpu((await api("/api/state")).gpu); } catch (e) { status(e.message, true); }
+}
+
 async function refresh() {
   state.app = await api("/api/state");
+  showGpu(state.app.gpu);
   if (state.app.job && state.app.job.state === "running") { showJob(state.app.job); pollJob(); }
   if (!state.app.song) {
     state.song = null;
@@ -1398,6 +1428,10 @@ $("uncertain").onclick = () => jumpUncertain();
 $("open-mp3").onclick = $("start-mp3").onclick = () => openMp3();
 $("open-folder").onclick = $("start-folder").onclick = () => openFolder();
 $("hint-ok").onclick = () => closeLevelsHint();
+$("gpu-install").onclick = async () => {
+  try { await api("/api/gpu", {}); pollGpu(); } catch (e) { status(e.message, true); }
+};
+$("gpu-restart").onclick = () => window.trackyardDesktop.restart();
 $("save-menu").onclick = (e) => { e.stopPropagation(); $("save-pop").hidden = !$("save-pop").hidden; };
 $("save-as").onclick = () => { $("save-pop").hidden = true; save(true); };
 window.addEventListener("click", () => { $("save-pop").hidden = true; });

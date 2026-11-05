@@ -118,9 +118,9 @@ start right away.
   packages, PyTorch for the CPU (on a Mac also the Apple GPU) and ffmpeg, trimmed to
   what a conversion imports. About 300 MB on macOS, well under GitHub's 2 GB limit per
   release file. The models (about 160 MB) download on the first conversion.
-- **NVIDIA on Windows:** a "Download GPU acceleration" button in the app fetches the
-  CUDA build of PyTorch (over 2 GB, straight from PyTorch's package index) into the
-  user's data folder; the server uses it from then on.
+- **NVIDIA on Windows:** "Download GPU support" on the start screen fetches the CUDA
+  build of PyTorch (2 GB, straight from PyTorch's package index) into the user's data
+  folder; the server uses it from then on. Built, not yet tested on a real GPU.
 - **AMD on Windows:** PyTorch with ROCm exists for Radeon RX 7000/9000 on Windows 11,
   but needs AMD's own driver package. Later, if at all; the CPU always works.
 - Intel Macs are out: PyTorch no longer ships current builds for them.

@@ -40,6 +40,8 @@ function startServer() {
     const { exe, env } = python();
     // Not "cache": macOS file names ignore case, and Chromium owns "Cache" in this folder.
     const args = ["-m", "trackyard.cli", "edit", "--no-browser", "--exit-with-stdin", "--port", "0", "--cache", path.join(data, "analysis")];
+    // NVIDIA support downloads on request (PyTorch for CUDA is 2 GB); Macs use the Apple GPU.
+    if (process.platform === "win32") args.push("--gpu-dir", path.join(data, "gpu"));
     server = spawn(exe, args, {
       cwd: data,
       windowsHide: true,
@@ -103,6 +105,11 @@ ipcMain.handle("pick", async (_e, kind, start) => {
     filters: audio ? [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "flac", "m4a", "opus", "aiff"] }] : undefined,
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("restart", () => {
+  app.relaunch();
+  app.quit();
 });
 
 function menu() {

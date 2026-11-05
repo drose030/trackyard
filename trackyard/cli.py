@@ -7,9 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import analysis
 from .difficulty import DEFAULT_PRESET, PRESETS
-from .pipeline import convert, copy_to_sd
 
 
 def log(msg: str) -> None:
@@ -36,22 +34,35 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--expert-only", action="store_true", help="no generated Hard/Medium/Easy")
     c.add_argument("--single-audio", action="store_true", help="write the full mix as song.ogg, no drums.ogg")
     c.add_argument("--sd", type=Path, help="also copy to <SD>/BeatTrain/Songs/")
-    c.add_argument("--device", default=analysis.best_device())
+    c.add_argument("--device", help="cpu, cuda or mps (default: the fastest available)")
 
     e = sub.add_parser("edit", help="open a song folder in the browser editor")
     e.add_argument("folder", type=Path, nargs="?", help="song folder to open (optional: open or convert from the editor)")
     e.add_argument("--cache", type=Path, default=Path("cache"), help="analysis cache for conversions (default: cache)")
     e.add_argument("--port", type=int, default=8765, help="local port (default 8765; 0 picks a free one)")
     e.add_argument("--no-browser", action="store_true", help="don't open a browser window")
-    e.add_argument("--exit-with-stdin", action="store_true", help=argparse.SUPPRESS)  # the desktop app
+    # the desktop app
+    e.add_argument("--exit-with-stdin", action="store_true", help=argparse.SUPPRESS)
+    e.add_argument("--gpu-dir", type=Path, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    # PyTorch loads only when a conversion starts: the editor opens fast, and GPU support
+    # downloaded in the editor can still go in front of the bundled PyTorch.
     if args.command == "edit":
         from .editor.server import serve
 
+        if args.gpu_dir:
+            from . import gpu
+
+            gpu.activate(args.gpu_dir)
         serve(args.folder, args.port, open_browser=not args.no_browser, cache=args.cache,
-              exit_with_stdin=args.exit_with_stdin)
+              exit_with_stdin=args.exit_with_stdin, gpu_dir=args.gpu_dir)
         return
+
+    from . import analysis
+    from .pipeline import convert, copy_to_sd
+
+    device = args.device or analysis.best_device()
 
     if args.sd and not args.sd.is_dir():
         sys.exit(f"SD card path not found: {args.sd}")
@@ -64,7 +75,7 @@ def main(argv: list[str] | None = None) -> None:
             continue
         log(f"{src.name}")
         t = time.time()
-        folder = convert(src, args.out, args.cache, args.device, args.tempo, taken,
+        folder = convert(src, args.out, args.cache, device, args.tempo, taken,
                          triplets=not args.no_triplets, finest=args.grid, stems=not args.single_audio,
                          lower=not args.expert_only, learned_lanes=not args.lane_rules,
                          levels_preset=args.levels, log=log)

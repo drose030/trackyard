@@ -217,9 +217,12 @@ footer {
 .job-progress { margin: 0 0 12px; }
 .job-progress[hidden] { display: none; }
 .job-step { display: flex; justify-content: space-between; gap: 12px; color: var(--text); margin-bottom: 6px; }
-#job-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.job-step span + span { color: var(--muted); font-variant-numeric: tabular-nums; }
 .job-track { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
-#job-bar { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.4s; }
-#job-bar.busy { width: 30%; animation: busy 1.4s ease-in-out infinite; }
+.job-track > div { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.4s; }
+.job-track > div.busy { width: 30%; animation: busy 1.4s ease-in-out infinite; }
 @keyframes busy { from { margin-left: -30%; } to { margin-left: 100%; } }
 .out { font-size: 12px; }
+.gpu { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.gpu[hidden] { display: none; }
+.gpu p { margin-bottom: 12px; }
