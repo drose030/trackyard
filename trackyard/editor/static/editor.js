@@ -79,8 +79,6 @@ const key = (n) => `${n.tick}:${n.lane}`;
 const color = (lane) => lane.split("-")[0];
 const notes = () => state.doc.levels[state.level];
 
-// Every change to the song goes through the document; the level being edited decides
-// cymbal versus tom (songdoc.js).
 function commit(change, options = {}) {
   state.doc.edit(change, { level: state.level, ...options });
 }

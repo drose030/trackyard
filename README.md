@@ -101,7 +101,7 @@ Bass drum. Cymbals are drawn round, drums square.
 | Copy, cut, paste | ⌘C, ⌘X, ⌘V (pastes at the playhead), e.g. to repeat a bar in every chorus |
 | Uncertain notes | N next, ⇧N back |
 | Undo / redo | ⌘Z / ⇧⌘Z |
-| Difficulty | 1–4 or the tabs |
+| Difficulty | 1–4 or the tabs on the right of the toolbar |
 | Rebuild easier levels | **Regenerate…**: all of Hard, Medium and Easy, or one, from Expert |
 
 Expert is the source: Hard, Medium and Easy are made from it by leaving notes out. So

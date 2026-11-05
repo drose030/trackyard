@@ -41,9 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--cache", type=Path, default=Path("cache"), help="analysis cache for conversions (default: cache)")
     e.add_argument("--port", type=int, default=8765, help="local port (default 8765; 0 picks a free one)")
     e.add_argument("--no-browser", action="store_true", help="don't open a browser window")
-    # the desktop app
-    e.add_argument("--exit-with-stdin", action="store_true", help=argparse.SUPPRESS)
-    e.add_argument("--gpu-dir", type=Path, help=argparse.SUPPRESS)
+    e.add_argument("--exit-with-stdin", action="store_true", help=argparse.SUPPRESS)  # the desktop app
+    e.add_argument("--gpu-dir", type=Path, help=argparse.SUPPRESS)  # the desktop app
     args = ap.parse_args(argv)
 
     # PyTorch loads only when a conversion starts: the editor opens fast, and GPU support

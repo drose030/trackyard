@@ -56,8 +56,8 @@ In `trackyard/`:
      out, fills slow down, Easy is about one hand plus one kick per bar.
 6. The song folder: **`chartfile.py`** writes `notes.mid` (pro drums in four
    difficulties, tempo map, time signatures, `BEAT` and `EVENTS` tracks);
-   **`export.py`** writes `song.ini`, the OGG stems, the cover and `trackyard.json`
-   (per-note confidence, conversion and difficulty settings).
+   **`export.py`** writes `song.ini`, the OGG stems and the cover; **`songfolder.py`**
+   writes `trackyard.json` (per-note confidence, conversion and difficulty settings).
 
 ## The editor
 
@@ -200,7 +200,7 @@ exported to JSON and evaluated with numpy.
 ```bash
 .venv/bin/python -m pytest
 .venv/bin/python -m pyflakes trackyard scripts tests
-node --check trackyard/editor/static/editor.js
+for f in trackyard/editor/static/*.js; do node --check "$f"; done
 ```
 
 `tests/test_chartfile.py` checks that saving a chart keeps everything except what was
