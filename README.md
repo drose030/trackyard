@@ -36,12 +36,15 @@ The first conversion downloads about 160 MB of model weights once.
 ### Or: the app for Mac or Windows
 
 The app holds Python, PyTorch and ffmpeg; nothing else needs installing. The first
-conversion downloads the models once (about 160 MB). It isn't signed yet, so the system
-warns the first time:
+conversion downloads the models once (about 160 MB). It isn't signed by a registered
+developer yet, so the system warns the first time:
 
 - **Mac** (Apple Silicon): `Trackyard-<version>-arm64.dmg`, about 300 MB. Open it and
-  drag Trackyard to Applications. The first time macOS refuses to open it: go to
-  **System Settings → Privacy & Security** and click **Open Anyway**.
+  drag Trackyard to Applications. Start it once; macOS refuses and offers only Done or
+  the bin, so click **Done**. Then go to **System Settings → Privacy & Security**, click
+  **Open Anyway** at the bottom, and start it again. (Version 1.1.0 and older can only
+  be opened by running `xattr -dr com.apple.quarantine /Applications/Trackyard.app` in
+  the Terminal first.)
 - **Windows** (64-bit): run `Trackyard-Setup-<version>.exe`; it installs for your user,
   without admin rights. If Windows says it protected your PC, click **More info → Run
   anyway**. Conversions run on the CPU, about 3–4 minutes per song. With an NVIDIA

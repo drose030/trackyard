@@ -130,8 +130,12 @@ npm run dist        # bundle Python, smoke test, build the installer for this OS
    it hangs.
 3. electron-builder writes `desktop/dist/Trackyard-<version>-arm64.dmg` (macOS, about
    300 MB, about 900 MB installed) or `Trackyard-Setup-<version>.exe` (Windows, a
-   per-user installer that needs no admin rights). Both are unsigned; see
-   [plan.md](plan.md) for signing.
+   per-user installer that needs no admin rights). Neither is signed with a
+   certificate; see [plan.md](plan.md). The Mac app is signed ad hoc
+   (`scripts/adhoc-sign.js`, an afterPack hook running `codesign --sign -`): without
+   any valid signature macOS calls a downloaded app damaged, with one the user can
+   allow it under Privacy & Security. electron-builder's own `identity: "-"` isn't
+   used because it would pick up a developer certificate from the keychain.
 
 ffmpeg comes from the `imageio-ffmpeg` package when there's none on the `PATH`.
 

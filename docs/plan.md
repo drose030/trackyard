@@ -127,8 +127,8 @@ start right away.
 - Intel Macs are out: PyTorch no longer ships current builds for them.
 
 Steps:
-1. macOS app: Electron shell (server, window, dialogs), bundled Python and models,
-   unsigned DMG.
+1. macOS app: Electron shell (server, window, dialogs), bundled Python (the models
+   download on the first conversion), DMG signed ad hoc (no certificate).
 2. Windows app, CPU: built with GitHub Actions, tested on a real PC.
 3. The NVIDIA download.
 4. Signing (Apple Developer ID and notarization; a Windows code-signing certificate)
