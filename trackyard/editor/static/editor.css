@@ -45,6 +45,7 @@ nav button .count { color: var(--muted); font-size: 11px; margin-left: 4px; }
 
 .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex: 1 1 auto; }
 .edit-actions { display: flex; gap: 6px; margin-left: auto; }
+#levels { margin-left: auto; }
 .split { position: relative; display: flex; }
 .split #save { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 #save-menu { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,0.35); padding: 4px 7px; }

@@ -1,7 +1,7 @@
 {
   "name": "trackyard-desktop",
   "productName": "Trackyard",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Turn songs into playable drum charts for Beat-Train and Clone Hero",
   "main": "main.js",
   "private": true,

@@ -10,6 +10,8 @@ separates the drums, finds the beat grid and writes down the drum hits in four
 difficulties. Its editor then shows where it was unsure, so you only fix what needs
 fixing, and saves the song straight to the MPC's SD card.
 
+![The Trackyard editor: drum lanes with the detected notes, a tom fill marked as uncertain, and the difficulty levels on the right](docs/images/editor.png)
+
 Everything runs on your computer. Beat-Train on the MPC only plays the finished song
 folder.
 
