@@ -18,12 +18,16 @@ pipeline in a background thread).
     POST /api/gpu       download PyTorch for the NVIDIA GPU (the Windows app); progress in
                         /api/state "gpu"
     POST /api/settings  {"export_dir", "hide_hint"} → remember the Save-as folder and dismissed hints
+    POST /api/sounds    {"voice", "expert", "tempos", "offset"} → candidate pad sounds for one
+                        Beat-Train voice, cut from the drum stem: [{start, length, at, free}]
+    GET  /api/sound.wav ?start=&length= → that cut as WAV, as it would be saved
     POST /api/reduce    {"expert": [[tick, lane], …], "settings", "tempos"} → generated
                         hard/medium/easy, timed by the tempo map being edited if sent
     POST /api/save      {"levels": {"expert": [[tick, lane], …], …}, "settings", "tempos", "offset",
-                        "dest", "overwrite"} → writes the chart, the level settings
-                        (trackyard.json) and, when sent, the tempo map ([[tick, bpm], …]) and
-                        offset (seconds, as song.ini delay); a draft moves into
+                        "sounds", "dest", "overwrite"} → writes the chart, the level settings
+                        (trackyard.json) and, when sent, the tempo map ([[tick, bpm], …]),
+                        offset (seconds, as song.ini delay) and changed pad sounds
+                        ({voice: {start, length} or null}, into sounds/); a draft moves into
                         dest/<song folder> (or dest/BeatTrain/Songs/…) on its first save
     POST /api/save_as   same body, "dest" required → copy the song folder into dest (or
                         dest/BeatTrain/Songs on an SD card), save the edits there and keep
@@ -50,9 +54,9 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
-from .. import chartfile
+from .. import chartfile, sounds
 from ..difficulty import PRESETS, clean_settings, lower_levels, preset_settings
 from ..songfolder import SongFolder, songs_dir
 from ..tempomap import TempoMap
@@ -76,6 +80,7 @@ class Song:
     def __init__(self, folder: Path):
         self.folder = SongFolder.open(folder).path
         self.lock = threading.Lock()
+        self._drums: sounds.DrumStem | None = None
         self.load()
 
     def load(self) -> None:
@@ -85,6 +90,8 @@ class Song:
         self.levels = chart.levels
         self.tempo_map, self.offset, self.five_lane = chart.tempo_map, chart.offset, chart.five_lane
         self.audio = song.audio()
+        self.has_drums = bool(song.drum_stems())
+        self.sounds = sounds.picks(self.folder)
         self.confidence = song.confidence()
         # How Hard/Medium/Easy are regenerated. Songs without settings (hand-made charts,
         # older conversions) got their lower levels from charter-like rules.
@@ -92,6 +99,26 @@ class Song:
 
     def stems(self) -> list[str]:
         return list(self.audio)
+
+    def drums(self) -> sounds.DrumStem:
+        """The drum stem, decoded on first use (for cutting pad sounds)."""
+        with self.lock:
+            if self._drums is None:
+                self._drums = sounds.DrumStem(self.folder)
+            return self._drums
+
+    def timed(self, notes: list[list], tempos: list[list] | None, offset: float | None) -> list[tuple[float, str]]:
+        """(tick, lane) pairs → (audio seconds, lane), on the tempo map being edited if sent."""
+        tm = TempoMap(self.tempo_map.ppq, clean_tempos(tempos), list(self.tempo_map.signatures)) if tempos else self.tempo_map
+        shift = self.offset if offset is None else float(offset)
+        return [(tm.seconds(int(t)) + shift, str(lane)) for t, lane in notes]
+
+    def sound_candidates(self, voice: str, expert: list[list], tempos: list[list] | None = None,
+                         offset: float | None = None) -> list[dict]:
+        if voice not in sounds.VOICES:
+            raise ValueError(f"unknown voice {voice!r}")
+        cuts = self.drums().candidates(self.timed(expert, tempos, offset), voice)
+        return [{"start": c.start, "length": c.length, "at": c.at, "free": c.free} for c in cuts]
 
     def info(self) -> dict:
         tm = self.tempo_map
@@ -107,6 +134,8 @@ class Song:
             "confidence": {f"{t}:{lane}": c for (t, lane), c in self.confidence.items()},
             "stems": self.stems(),
             "stem_roles": self.audio,
+            "sounds": self.sounds,
+            "has_drums": self.has_drums,
             "level_settings": self.level_settings,
             "presets": {p: preset_settings(p) for p in PRESETS},
             "editable": not self.five_lane,
@@ -122,22 +151,26 @@ class Song:
         levels = lower_levels([(int(t), str(lane)) for t, lane in expert], tm, settings, self.confidence)
         return {lvl: [[t, lane] for t, lane in notes] for lvl, notes in levels.items()}
 
-    def save(self, levels: dict[str, list[list]], settings: dict | None = None,
-             tempos: list[list] | None = None, offset: float | None = None, keep_original: bool = True) -> str:
-        """`keep_original`: back the chart up as *.orig once; not for drafts and copies."""
+    def save(self, body: dict, keep_original: bool = True) -> str:
+        """Write what the editor sends (see /api/save). `keep_original`: back the chart up
+        as *.orig once; not for drafts and copies."""
         if self.five_lane:
             raise ValueError(self.info()["reason"])
-        if tempos is not None:
-            tempos = clean_tempos(tempos)
-        if offset is not None and not -60 < float(offset) < 60:
+        tempos = clean_tempos(body["tempos"]) if body.get("tempos") is not None else None
+        offset = float(body["offset"]) if body.get("offset") is not None else None
+        if offset is not None and not -60 < offset < 60:
             raise ValueError("bad offset")
-        clean = {lvl: sorted({(int(t), str(lane)) for t, lane in notes}) for lvl, notes in levels.items()}
+        clean = {lvl: sorted({(int(t), str(lane)) for t, lane in notes}) for lvl, notes in body["levels"].items()}
         chartfile.check(clean)
-        level_settings = clean_settings(settings) if settings else None
+        level_settings = clean_settings(body["settings"]) if body.get("settings") else None
+        changed_sounds = body.get("sounds") or {}
+        drums = self.drums() if any(changed_sounds.values()) else None
         with self.lock:
-            path = chartfile.save(self.folder, clean, tempos, None if offset is None else float(offset), keep_original)
+            path = chartfile.save(self.folder, clean, tempos, offset, keep_original)
             if level_settings:
                 SongFolder.open(self.folder).save_level_settings(level_settings)
+            if changed_sounds:
+                sounds.save(self.folder, changed_sounds, drums)
             self.load()
         return path.name
 
@@ -288,17 +321,16 @@ class App:
             job.error = f"{type(e).__name__}: {e}"
             job.state = "failed"
 
-    def save(self, levels: dict[str, list[list]], dest: Path | None, overwrite: bool,
-             settings: dict | None = None, tempos: list[list] | None = None, offset: float | None = None) -> dict:
+    def save(self, body: dict, dest: Path | None, overwrite: bool) -> dict:
         song = self.song
         if not self.is_draft():
-            return {"file": song.save(levels, settings, tempos, offset), "folder": str(song.folder)}
+            return {"file": song.save(body), "folder": str(song.folder)}
         if dest is None:
             raise ValueError("choose a folder for the new song")
         target = self._target(dest)
         if target.exists() and not overwrite:
             raise FileExistsError(str(target))
-        file = song.save(levels, settings, tempos, offset, keep_original=False)
+        file = song.save(body, keep_original=False)
         if target.exists():
             shutil.rmtree(target)
         draft = song.folder
@@ -310,11 +342,10 @@ class App:
         self.save_settings(out_dir=str(dest.resolve()))
         return {"file": file, "folder": str(target), "settings": self.settings}
 
-    def save_as(self, levels: dict[str, list[list]], dest: Path, overwrite: bool,
-                settings: dict | None = None, tempos: list[list] | None = None, offset: float | None = None) -> dict:
+    def save_as(self, body: dict, dest: Path, overwrite: bool) -> dict:
         """Copy the song into `dest`, save the edits into the copy and keep editing it."""
         if self.is_draft():
-            return self.save(levels, dest, overwrite, settings, tempos, offset)
+            return self.save(body, dest, overwrite)
         target = self._target(dest)
         if target == self.song.folder:
             raise ValueError("that is the song's own folder")
@@ -324,7 +355,7 @@ class App:
             shutil.rmtree(target)
         shutil.copytree(self.song.folder, target, ignore=shutil.ignore_patterns("*.orig"))
         copy = Song(target)
-        file = copy.save(levels, settings, tempos, offset, keep_original=False)
+        file = copy.save(body, keep_original=False)
         with self.lock:
             self.song = copy  # same stem names: the UI keeps its audio
         self.save_settings(export_dir=str(dest.resolve()))
@@ -410,6 +441,15 @@ def make_handler(app: App, picker=pick):
                 if not app.song:
                     return self._json({"error": "no song open"}, 404)
                 return self._json({**app.song.info(), "draft": app.is_draft()})
+            if path == "/api/sound.wav":
+                if not app.song:
+                    return self._json({"error": "no song open"}, 404)
+                q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                try:
+                    cut = sounds.Cut(float(q["start"][0]), min(float(q["length"][0]), 2.0), 0.0, 0.0)
+                except (KeyError, ValueError):
+                    return self._json({"error": "start and length needed"}, 400)
+                return self._send(200, app.song.drums().wav(cut), "audio/wav")
             if path.startswith("/audio/"):
                 name = unquote(path[len("/audio/"):])
                 if not app.song or name not in app.song.stems():  # whitelist: no path traversal
@@ -446,6 +486,9 @@ def make_handler(app: App, picker=pick):
                     return self._json(app.settings)
                 if not app.song:
                     return self._json({"error": "no song open"}, HTTPStatus.BAD_REQUEST)
+                if self.path == "/api/sounds":
+                    return self._json(app.song.sound_candidates(body["voice"], body["expert"], body.get("tempos"),
+                                                                body.get("offset")))
                 if self.path == "/api/reduce":
                     return self._json(app.song.reduce(body["expert"], body.get("settings"), body.get("tempos")))
                 if self.path in ("/api/save", "/api/save_as"):
@@ -453,9 +496,7 @@ def make_handler(app: App, picker=pick):
                     if self.path == "/api/save_as" and dest is None:
                         raise ValueError("choose a folder")
                     save = app.save_as if self.path == "/api/save_as" else app.save
-                    return self._json({"ok": True, **save(body["levels"], dest, bool(body.get("overwrite")),
-                                                          body.get("settings"), body.get("tempos"),
-                                                          body.get("offset"))})
+                    return self._json({"ok": True, **save(body, dest, bool(body.get("overwrite")))})
                 return self._json({"error": "not found"}, 404)
             except FileExistsError as e:
                 return self._json({"error": "exists", "target": str(e)}, HTTPStatus.CONFLICT)

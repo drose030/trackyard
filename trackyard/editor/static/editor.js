@@ -86,6 +86,7 @@ function commit(change, options = {}) {
 function onDocChange(what) {
   if (what.undo) state.selection.clear();
   renderHistory();
+  renderSoundButtons();
   renderTune();
   renderTempo();
   draw();
@@ -199,6 +200,7 @@ function renderMixer() {
   });
   bindVolume($("vol-ticks"), "ticks");
   bindVolume($("vol-metronome"), "metronome");
+  renderSoundButtons();
   $("transport").hidden = $("toolbar").hidden = !state.song;
 }
 
@@ -367,6 +369,7 @@ function drawLanes(w, t0, t1) {
     g.fillStyle = i % 2 ? "rgba(255,255,255,0.015)" : "rgba(255,255,255,0.035)";
     g.fillRect(0, top + i * ROW_H, w, ROW_H);
   });
+  drawSoundCut(top);
   const moving = state.drag && state.drag.moved;
   for (const n of notes()) {
     const selected = state.selection.has(key(n));
@@ -651,6 +654,12 @@ canvas.addEventListener("wheel", (e) => {
 window.addEventListener("keydown", (e) => {
   if (!state.song || ["SELECT", "INPUT"].includes(e.target.tagName)) return;
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+  if (!$("sound-picker").hidden && ["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+    e.preventDefault();
+    if (e.key === "Escape") closeSoundPicker();
+    else stepSound(e.key === "ArrowLeft" ? -1 : 1);
+    return;
+  }
   if (e.code === "Space") { e.preventDefault(); play(); }
   else if (mod && k === "z") { e.preventDefault(); e.shiftKey ? state.doc.redo() : state.doc.undo(); }
   else if (mod && k === "s") { e.preventDefault(); save(e.shiftKey); }
@@ -790,6 +799,7 @@ function setTempoMode(on) {
   if (state.tempoMode) state.selection.clear();
   renderTempo();
   renderTune();
+  renderSoundButtons();
   draw();
 }
 
@@ -882,6 +892,131 @@ function mergeOnsets(a, b) {
   const all = [...a, ...b].sort((x, y) => x - y), out = [];
   for (const s of all) if (!out.length || s - out[out.length - 1] > 0.015) out.push(s);
   return out;
+}
+
+// MARK: - Pad sounds
+
+// Beat-Train can mute the drum stem and play one sound per pad instead. Each row (= the
+// pad's voice) gets a button on the right; it steps through hits of that row cut from
+// the drum stem, best first (sounds.py), and the chosen one is saved on Save.
+
+const picker = { voice: null, cuts: [], i: 0, player: null };
+
+function renderSoundButtons() {
+  const box = $("row-sounds");
+  box.innerHTML = "";
+  if (!state.song || state.tempoMode) return;
+  const top = lanesTop();
+  ROWS.forEach((voice, i) => {
+    const pick = state.doc.sounds[voice];
+    const b = document.createElement("button");
+    b.className = `row-sound${pick ? " set" : ""}`;
+    b.textContent = "♪";
+    b.style.top = `${top + i * ROW_H + (ROW_H - 26) / 2}px`;
+    b.disabled = !state.song.has_drums;
+    b.title = !state.song.has_drums ? "Pad sounds are cut from the drum stem; this song has none"
+      : pick?.file ? `${ROW_NAMES[voice]}: your own ${pick.file}`
+      : pick ? `${ROW_NAMES[voice]}: a sound is picked for Beat-Train's pad`
+      : `Pick a ${ROW_NAMES[voice]} sound for Beat-Train's pad`;
+    b.onclick = () => (picker.voice === voice && !$("sound-picker").hidden ? closeSoundPicker() : openSoundPicker(voice));
+    box.appendChild(b);
+  });
+}
+
+// The cut being offered, as a band over the waveforms and in its row.
+function drawSoundCut(top) {
+  const c = !$("sound-picker").hidden && picker.cuts[picker.i];
+  if (!c) return;
+  const x0 = secToX(c.start), x1 = Math.max(x0 + 2, secToX(c.start + c.length));
+  const row = top + ROWS.indexOf(picker.voice) * ROW_H;
+  g.fillStyle = "rgba(91,156,255,0.12)";
+  g.fillRect(x0, RULER_H, x1 - x0, top - RULER_H);
+  g.fillStyle = "rgba(91,156,255,0.28)";
+  g.strokeStyle = "rgba(91,156,255,0.9)";
+  g.lineWidth = 1;
+  g.beginPath();
+  g.roundRect(x0, row + 4, x1 - x0, ROW_H - 8, 4);
+  g.fill();
+  g.stroke();
+}
+
+async function openSoundPicker(voice) {
+  Object.assign(picker, { voice, cuts: [], i: 0 });
+  renderSoundPicker("Finding clean hits…");
+  try {
+    picker.cuts = await api("/api/sounds", { voice, expert: expertPairs(), tempos: tempoPairs(), offset: state.doc.tempo.offset });
+  } catch (e) { return renderSoundPicker(e.message); }
+  if (picker.voice !== voice) return;
+  const pick = state.doc.sounds[voice];
+  if (pick && !pick.file) {
+    const j = picker.cuts.findIndex((c) => Math.abs(c.start - pick.start) < 0.002);
+    if (j >= 0) picker.i = j;
+    else picker.cuts.unshift({ ...pick, at: pick.start, free: null });
+  }
+  showCut();
+}
+
+function renderSoundPicker(message) {
+  const p = $("sound-picker"), voice = picker.voice, c = picker.cuts[picker.i];
+  p.hidden = false;
+  // Below the row, or above it when there is no room: the row shows the cut.
+  const row = lanesTop() + ROWS.indexOf(voice) * ROW_H;
+  const below = row + ROW_H + 4;
+  p.style.top = `${below + p.offsetHeight <= canvas.clientHeight - 4 ? below : Math.max(4, row - p.offsetHeight - 4)}px`;
+  $("sp-title").textContent = `${ROW_NAMES[voice]} sound`;
+  const pick = state.doc.sounds[voice];
+  const inUse = c && pick && !pick.file && Math.abs(c.start - pick.start) < 0.002;
+  $("sp-info").textContent = message ?? (!c ? "No notes in this row to cut a sound from."
+    : `Hit ${picker.i + 1} of ${picker.cuts.length} · bar ${barOf(Math.max(0, Math.round(secToTick(c.at))))} · ` +
+      `${c.length.toFixed(2)} s${c.free !== null && c.free < c.length + 0.01 ? " (cut before the next note)" : ""}${inUse ? " · in use" : ""}`);
+  for (const id of ["sp-prev", "sp-next"]) $(id).disabled = picker.cuts.length < 2;
+  $("sp-play").disabled = $("sp-use").disabled = !c;
+  $("sp-none").disabled = !pick;
+}
+
+function showCut() {
+  const c = picker.cuts[picker.i];
+  renderSoundPicker();
+  if (!c) return;
+  state.view.start = c.at - (canvas.clientWidth - GUTTER) * 0.25 / state.view.pxPerSec;
+  draw();
+  playCut();
+}
+
+function playCut() {
+  const c = picker.cuts[picker.i];
+  if (!c) return;
+  picker.player?.pause();
+  picker.player = new Audio(`/api/sound.wav?start=${c.start}&length=${c.length}`);
+  picker.player.play().catch(() => {});
+}
+
+function stepSound(dir) {
+  const n = picker.cuts.length;
+  if (n < 2) return;
+  picker.i = (picker.i + dir + n) % n;
+  showCut();
+}
+
+function useSound() {
+  const c = picker.cuts[picker.i], voice = picker.voice;
+  commit((d) => { d.sounds[voice] = { start: c.start, length: c.length }; });
+  status(`${ROW_NAMES[voice]} sound picked; Save writes it as sounds/${voice}.wav`);
+  closeSoundPicker();
+}
+
+function removeSound() {
+  const voice = picker.voice;
+  commit((d) => { d.sounds[voice] = null; });
+  status(`No ${ROW_NAMES[voice]} sound: with pad sounds on, that drum stays silent in Beat-Train`);
+  closeSoundPicker();
+}
+
+function closeSoundPicker() {
+  picker.player?.pause();
+  picker.voice = null;
+  $("sound-picker").hidden = true;
+  if (state.song) draw();
 }
 
 // MARK: - Level settings
@@ -1158,6 +1293,8 @@ async function refresh() {
   if (state.app.job && state.app.job.state === "running") { showJob(state.app.job); pollJob(); }
   if (!state.app.song) {
     state.song = state.doc = null;
+    closeSoundPicker();
+    renderSoundButtons();
     $("start").hidden = false;
     $("song-title").textContent = "Trackyard";
     setSongControls(false);
@@ -1172,8 +1309,10 @@ async function refresh() {
   state.doc = new SongDoc({
     levels: state.song.levels, settings: structuredClone(state.song.level_settings),
     tempo: new TempoMap(state.song.ppq, state.song.tempos, state.song.offset, state.song.signatures),
+    sounds: state.song.sounds,
     dirty: Boolean(state.song.draft),  // a new song isn't saved anywhere yet
   });
+  closeSoundPicker();
   state.doc.onChange(onDocChange);
   state.selection.clear();
   beatCache = { end: -1, list: [] };
@@ -1208,6 +1347,12 @@ $("uncertain").onclick = () => jumpUncertain();
 $("open-mp3").onclick = $("start-mp3").onclick = () => openMp3();
 $("open-folder").onclick = $("start-folder").onclick = () => openFolder();
 $("hint-ok").onclick = () => closeLevelsHint();
+$("sp-prev").onclick = () => stepSound(-1);
+$("sp-next").onclick = () => stepSound(1);
+$("sp-play").onclick = () => playCut();
+$("sp-use").onclick = () => useSound();
+$("sp-none").onclick = () => removeSound();
+$("sp-close").onclick = () => closeSoundPicker();
 $("gpu-install").onclick = async () => {
   try { await api("/api/gpu", {}); pollGpu(); } catch (e) { status(e.message, true); }
 };

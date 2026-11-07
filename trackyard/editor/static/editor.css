@@ -120,6 +120,34 @@ footer {
   accent-color: #9097a6;
   cursor: pointer;
 }
+.row-sounds { position: absolute; right: 0; top: 0; width: 0; height: 0; }
+.row-sound {
+  position: absolute;
+  right: 8px;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: rgba(38, 42, 51, 0.85);
+}
+.row-sound.set { color: #fff; border-color: var(--accent); background: rgba(91, 156, 255, 0.35); }
+.sound-picker {
+  position: absolute;
+  right: 44px;
+  z-index: 5;
+  width: 300px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+.sound-picker[hidden] { display: none; }
+.sp-head { display: flex; justify-content: space-between; align-items: center; }
+.sp-head button { border: 0; background: transparent; font-size: 16px; padding: 0 4px; }
+.sp-info { color: var(--muted); font-size: 12px; margin: 6px 0 10px; min-height: 16px; }
+.sp-row { display: flex; gap: 6px; }
+.sp-row #sp-use { margin-left: auto; }
 .bar {
   display: flex;
   flex-wrap: wrap;

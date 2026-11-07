@@ -136,6 +136,26 @@ def test_reduce_uses_the_tempo_map_being_edited(server):
     assert e.value.code == 400
 
 
+def test_pad_sounds_are_offered_previewed_and_saved(server, tmp_path):
+    song = json.loads(get(server + "/api/song")[1])
+    assert song["has_drums"] and song["sounds"] == {}
+    expert = song["levels"]["expert"]
+    cuts = post(server + "/api/sounds", {"voice": "kick", "expert": expert})
+    assert cuts and {"start", "length", "at", "free"} <= set(cuts[0])
+    status, wav = get(server + f"/api/sound.wav?start={cuts[0]['start']}&length={cuts[0]['length']}")
+    assert status == 200 and wav[:4] == b"RIFF"
+
+    pick = {"start": cuts[0]["start"], "length": cuts[0]["length"]}
+    post(server + "/api/save", {"levels": song["levels"], "sounds": {"kick": pick}})
+    assert (tmp_path / "Song" / "sounds" / "kick.wav").exists()
+    assert json.loads(get(server + "/api/song")[1])["sounds"] == {"kick": pick}
+    post(server + "/api/save", {"levels": song["levels"], "sounds": {"kick": None}})
+    assert not (tmp_path / "Song" / "sounds").exists()
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(server + "/api/sounds", {"voice": "purple", "expert": expert})
+    assert e.value.code == 400
+
+
 def test_save_tempo_map_and_offset(server, tmp_path):
     song = json.loads(get(server + "/api/song")[1])
     levels = song["levels"]

@@ -156,10 +156,21 @@ bar, so they move with the grid.
 | Mute a stem | Click its name or speaker icon left of its waveform |
 | Volumes | Each stem's slider under its name; note ticks and metronome in the transport bar |
 
+### Pad sounds for Beat-Train
+
+Beat-Train can mute the drum stem and play a real drum sound on each pad strike
+instead. The ♪ button right of each row picks that row's sound from the song's own
+drum stem: it steps through the row's hits, best first (as few other drums at the same
+time as possible, ringing out freely, no ghost notes), and plays each one. **‹ ›** (or ←/→) step, **▶︎** plays again, **Use this**
+picks it, **No sound** removes it. Save writes the picks to `sounds/` in the song
+folder. The drum stem is one track, so with pad sounds on Beat-Train mutes all of it: a
+pad without a sound stays silent then. Songs without a drum stem can't get
+pad sounds.
+
 ### What saving changes
 
-Only the drum notes, the difficulty settings, and the tempo map and offset when you
-changed them. Guitar, vocals and everything else in a song from elsewhere stay as they
+Only the drum notes, the difficulty settings, the pad sounds, and the tempo map and
+offset when you changed them. Guitar, vocals and everything else in a song from elsewhere stay as they
 were. The first plain Save into an existing song keeps the original chart as
 `notes.mid.orig` (or `notes.chart.orig`). 5-lane charts open read-only.
 
@@ -181,6 +192,7 @@ Each song becomes a folder under `out/`:
 | `song.ogg` | Everything else |
 | `album.jpg` / `.png` | The cover, when the file has one |
 | `trackyard.json` | Trackyard's notes for the editor (confidences, settings) |
+| `sounds/` | Only after picking pad sounds in the editor: one WAV per Beat-Train pad, named after the row's colour: `kick.wav` (Bass drum), `red.wav` (Snare), `yellow.wav` (Hi-hat / Tom), `blue.wav` (Tom / Ride), `orange.wav` (Cymbal), `green.wav` (Floor tom). With pad sounds on, a pad without a file stays silent |
 
 | Option | Effect |
 |---|---|

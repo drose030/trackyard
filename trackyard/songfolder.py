@@ -87,8 +87,11 @@ class SongFolder:
         return {(n["tick"], n["lane"]): n["confidence"] for n in self.sidecar().get("notes", [])}
 
     def save_level_settings(self, settings: dict[str, dict]) -> None:
-        data = {"trackyard": 1, **self.sidecar()}
-        data["levels"] = {**data.get("levels", {}), **settings}
+        self.update_sidecar(levels={**self.sidecar().get("levels", {}), **settings})
+
+    def update_sidecar(self, **entries) -> None:
+        """Replace top-level entries of trackyard.json, keeping the others."""
+        data = {"trackyard": 1, **self.sidecar(), **entries}
         (self.path / SIDECAR).write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 

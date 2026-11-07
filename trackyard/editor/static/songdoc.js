@@ -1,5 +1,6 @@
 // The song being edited: the notes of every level, how the lower levels are generated
-// (level settings) and the tempo map, with undo, redo and whether it is saved.
+// (level settings), the tempo map and the pad sounds, with undo, redo and whether it is
+// saved.
 //
 // Every change goes through `edit`, which keeps what a chart file can hold: one note per
 // colour and tick, and cymbal versus tom per colour and tick on every level at once
@@ -16,33 +17,38 @@ export const rowOf = (lane) => (lane === "green-cym" ? "orange" : lane === "gree
 
 export class SongDoc {
   // levels: level → [{tick, lane}] or [[tick, lane]]; settings: level → settings;
-  // tempo: a TempoMap. `dirty`: not saved anywhere yet (a new song).
-  constructor({ levels, settings, tempo, dirty = false }) {
+  // tempo: a TempoMap; sounds: voice → {start, length} (a cut of the drum stem) or
+  // {file} (put there by hand). `dirty`: not saved anywhere yet (a new song).
+  constructor({ levels, settings, tempo, sounds = {}, dirty = false }) {
     const notes = {};
     for (const l of LEVELS) notes[l] = (levels[l] || []).map((n) => (Array.isArray(n) ? { tick: n[0], lane: n[1] } : { ...n }));
-    this.current = freeze({ levels: normalize(notes, "expert"), settings: { ...settings }, tempo });
+    this.current = freeze({ levels: normalize(notes, "expert"), settings: { ...settings }, tempo, sounds: { ...sounds } });
     this.undoStack = [];
     this.redoStack = [];
     this.last = null;  // {key, at} of the last edit, for coalescing
     this.dirty = dirty;
     this.savedTempo = tempo;
+    this.savedSounds = this.current.sounds;
     this.listeners = [];
   }
 
   get levels() { return this.current.levels; }
   get settings() { return this.current.settings; }
   get tempo() { return this.current.tempo; }
+  get sounds() { return this.current.sounds; }
   get canUndo() { return this.undoStack.length > 0; }
   get canRedo() { return this.redoStack.length > 0; }
 
   // `change(draft)` may change draft.levels (arrays and notes are copies), replace
-  // draft.settings[level] or draft.tempo. `level` decides cymbal vs tom. Edits with the
-  // same `coalesce` key less than `within` ms apart are one undo step.
+  // draft.settings[level], draft.sounds[voice] (null: no sound) or draft.tempo. `level`
+  // decides cymbal vs tom. Edits with the same `coalesce` key less than `within` ms apart
+  // are one undo step.
   edit(change, { level = "expert", coalesce = null, within = Infinity } = {}) {
     const draft = {
       levels: Object.fromEntries(LEVELS.map((l) => [l, this.levels[l].map((n) => ({ ...n }))])),
       settings: { ...this.settings },
       tempo: this.tempo,
+      sounds: { ...this.sounds },
     };
     change(draft);
     const now = Date.now();
@@ -50,7 +56,8 @@ export class SongDoc {
     if (!merge) this.undoStack.push(this.current);
     this.redoStack = [];
     this.last = coalesce === null ? null : { key: coalesce, at: now };
-    this.current = freeze({ levels: normalize(draft.levels, level), settings: draft.settings, tempo: draft.tempo });
+    this.current = freeze({ levels: normalize(draft.levels, level), settings: draft.settings, tempo: draft.tempo,
+                            sounds: draft.sounds });
     this.dirty = true;
     this.emit({ edit: true });
   }
@@ -71,17 +78,31 @@ export class SongDoc {
     return !this.tempo.equals(this.savedTempo);
   }
 
-  // What /api/save takes: every level, the settings and, if it changed, the tempo map.
+  // Voices whose sound changed since the last save: voice → {start, length} or null.
+  soundChanges() {
+    const out = {};
+    for (const v of new Set([...Object.keys(this.sounds), ...Object.keys(this.savedSounds)])) {
+      const now = this.sounds[v] ?? null;
+      if (JSON.stringify(now) !== JSON.stringify(this.savedSounds[v] ?? null)) out[v] = now;
+    }
+    return out;
+  }
+
+  // What /api/save takes: every level, the settings and, if they changed, the tempo map
+  // and the pad sounds.
   saveBody() {
     const body = { levels: Object.fromEntries(LEVELS.map((l) => [l, this.levels[l].map((n) => [n.tick, n.lane])])),
                    settings: this.settings };
     if (this.tempoChanged()) Object.assign(body, { tempos: this.tempo.pairs(), offset: this.tempo.offset });
+    const sounds = this.soundChanges();
+    if (Object.keys(sounds).length) body.sounds = sounds;
     return body;
   }
 
   markSaved() {
     this.dirty = false;
     this.savedTempo = this.tempo;
+    this.savedSounds = this.sounds;
     this.emit({ saved: true });
   }
 
@@ -117,5 +138,6 @@ function freeze(doc) {
   for (const l of LEVELS) { doc.levels[l].forEach(Object.freeze); Object.freeze(doc.levels[l]); }
   Object.freeze(doc.levels);
   Object.freeze(doc.settings);
+  Object.freeze(doc.sounds);
   return Object.freeze(doc);
 }

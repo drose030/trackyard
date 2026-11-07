@@ -76,3 +76,16 @@ test("listeners hear edits, undo and saves", () => {
   d.markSaved();
   assert.deepEqual(heard, ["edit", "undo", "saved"]);
 });
+
+test("pad sounds: undoable, and only changed voices are saved", () => {
+  const d = new SongDoc({ levels: {}, settings: {}, tempo, sounds: { red: { file: "red.ogg" }, kick: { start: 1, length: 0.3 } } });
+  assert.ok(!("sounds" in d.saveBody()));
+  d.edit((x) => { x.sounds.kick = { start: 2, length: 0.4 }; x.sounds.orange = { start: 5, length: 1.2 }; });
+  assert.deepEqual(d.saveBody().sounds, { kick: { start: 2, length: 0.4 }, orange: { start: 5, length: 1.2 } });
+  d.edit((x) => { x.sounds.red = null; });
+  assert.deepEqual(d.saveBody().sounds.red, null);
+  d.undo();
+  assert.deepEqual(d.sounds.red, { file: "red.ogg" });
+  d.markSaved();
+  assert.ok(!("sounds" in d.saveBody()));
+});

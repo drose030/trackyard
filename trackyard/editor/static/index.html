@@ -117,6 +117,18 @@
   <main>
     <canvas id="view"></canvas>
     <div id="stem-volumes" class="stem-volumes" aria-label="Stem volumes"></div>
+    <div id="row-sounds" class="row-sounds" aria-label="Pad sounds for Beat-Train"></div>
+    <div id="sound-picker" class="sound-picker" hidden>
+      <div class="sp-head"><b id="sp-title"></b><button id="sp-close" title="Close (Esc)">×</button></div>
+      <p id="sp-info" class="sp-info"></p>
+      <div class="sp-row">
+        <button id="sp-prev" title="Previous hit (←)">‹</button>
+        <button id="sp-play" title="Play this hit again">▶︎</button>
+        <button id="sp-next" title="Next hit (→)">›</button>
+        <button id="sp-use" class="primary" title="Beat-Train plays this on the pad; saved as sounds/&lt;pad&gt;.wav">Use this</button>
+        <button id="sp-none" title="With pad sounds on, this drum stays silent in Beat-Train">No sound</button>
+      </div>
+    </div>
     <section id="start" class="overlay" hidden>
       <div class="card">
         <h1>Trackyard</h1>

@@ -71,6 +71,11 @@ drawing; behind it:
   can hold.
 - `tempomap.js`: ticks ↔ seconds, pinning beats, anchors, beats; the same math as
   `trackyard/tempomap.py`.
+- Pad sounds: `trackyard/sounds.py` ranks a row's hits in the drum stem (fewest notes
+  of other rows at the same time first, then free ringing, a level in the upper middle
+  of the row's hits, room before), cuts each from just before its onset for as long as
+  it rings (capped per pad, stopped 5 ms before the next hit, faded out) and writes
+  `sounds/<voice>.wav`, with the cut kept in `trackyard.json`. The editor previews cuts from `/api/sound.wav`.
 - `transport.js`: playback. The stems play through `<audio>` elements, served with
   range requests so they can seek; Web Audio synthesizes the note ticks and the
   metronome.
