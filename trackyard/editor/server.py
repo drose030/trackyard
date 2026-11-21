@@ -295,6 +295,7 @@ class App:
                 if not (self.song and old in self.song.folder.parents):
                     shutil.rmtree(old, ignore_errors=True)
             job = self.job = Job(audio, self.drafts / time.strftime("%Y%m%d-%H%M%S"))
+        self.save_settings(audio_dir=str(audio.resolve().parent))  # the next Convert MP3 starts there
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
 
@@ -324,7 +325,7 @@ class App:
     def save(self, body: dict, dest: Path | None, overwrite: bool) -> dict:
         song = self.song
         if not self.is_draft():
-            return {"file": song.save(body), "folder": str(song.folder)}
+            return {"file": song.save(body), "folder": str(song.folder), "settings": self.settings}
         if dest is None:
             raise ValueError("choose a folder for the new song")
         target = self._target(dest)

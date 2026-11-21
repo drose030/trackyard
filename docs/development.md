@@ -82,7 +82,8 @@ drawing; behind it:
 
 - New songs from Convert MP3 are drafts in `cache/drafts/` until their first save moves
   them into the chosen folder. A new conversion deletes the other unsaved drafts.
-- Settings (last save folder, last Save-as folder, dismissed hints) live in
+- Settings (last save folder, last Save-as folder, folder of the last converted file,
+  dismissed hints) live in
   `~/.trackyard/editor.json`; volumes are kept in the browser's local storage.
 - `trackyard/chartfile.py` reads and saves the chart, with one adapter each for
   `notes.mid` and `notes.chart`. Saving replaces only the drum gems and their pro-drums

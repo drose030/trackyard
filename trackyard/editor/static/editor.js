@@ -22,6 +22,7 @@ const state = {
   selection: new Set(), // keys "tick:lane" in the current level
   clipboard: null,     // [{dt, lane}]
   view: { start: 0, pxPerSec: 160 },
+  follow: true,        // the view follows the playhead; off while the user scrolls elsewhere
   snap: 4,
   speed: 1,
   ticksOn: true, metronomeOn: false,
@@ -221,10 +222,12 @@ function toggleMute(stem) {
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const r = canvas.getBoundingClientRect();
-  canvas.width = Math.round(r.width * dpr);
-  canvas.height = Math.round(r.height * dpr);
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const [c, ctx] of [[canvas, g], [overview, og]]) {
+    const r = c.getBoundingClientRect();
+    c.width = Math.round(r.width * dpr);
+    c.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
   draw();
 }
 
@@ -232,9 +235,13 @@ function draw() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   g.fillStyle = "#15171c";
   g.fillRect(0, 0, w, h);
-  if (!state.song) return;
+  if (!state.song) {
+    overview.hidden = true;
+    return;
+  }
 
   const t0 = state.view.start, t1 = xToSec(w);
+  drawOverview(t0, t1);
   drawGrid(w, h, t0, t1);
   drawWaves(w);
   drawLanes(w, t0, t1);
@@ -462,21 +469,85 @@ function peaks(buf, rate = 200) {
 function play() {
   if (!state.song) return;
   if (transport.playing) transport.pause();
-  else transport.play();
+  else {
+    state.follow = true;
+    transport.play();
+  }
 }
 
 function seek(sec) {
+  state.follow = true;
   transport.seek(sec);
   if (!transport.playing) draw();
 }
 
+// While playing, the view pages along with the playhead, unless the user scrolled away;
+// it follows again once the playhead is back in view.
 function frame() {
   if (!transport.playing) return;
-  const pos = position(), w = canvas.clientWidth;
-  if (secToX(pos) > w * 0.75 || secToX(pos) < GUTTER) state.view.start = pos - (w - GUTTER) * 0.2 / state.view.pxPerSec;
+  const w = canvas.clientWidth, x = secToX(position());
+  if (!state.follow && x >= GUTTER && x <= w * 0.75) state.follow = true;
+  if (state.follow && (x > w * 0.75 || x < GUTTER)) state.view.start = position() - (w - GUTTER) * 0.2 / state.view.pxPerSec;
   draw();
   requestAnimationFrame(frame);
 }
+
+// MARK: - Overview
+
+// The whole song under the timeline: all stems' waveform, the part in view as a box and
+// the playhead as a line. Clicking or dragging moves the view there.
+
+const overview = $("overview"), og = overview.getContext("2d");
+let overviewBins = { key: "", max: null };
+
+function drawOverview(t0, t1) {
+  const dur = audio.duration, w = overview.clientWidth, h = overview.clientHeight;
+  overview.hidden = !state.song || !dur;
+  if (overview.hidden || !w) return;
+  const key = `${w}:${Object.keys(audio.peaks).join(",")}`;
+  if (overviewBins.key !== key) {
+    const max = new Float32Array(w);
+    for (const p of Object.values(audio.peaks)) {
+      for (let x = 0; x < w; x++) {
+        const a = Math.floor(x / w * dur * p.rate), b = Math.max(a + 1, Math.floor((x + 1) / w * dur * p.rate));
+        for (let i = a; i < b && i < p.data.length; i++) max[x] = Math.max(max[x], p.data[i]);
+      }
+    }
+    overviewBins = { key, max };
+  }
+  og.fillStyle = "#1e2128";
+  og.fillRect(0, 0, w, h);
+  og.fillStyle = "#4d5566";
+  const mid = h / 2;
+  overviewBins.max.forEach((m, x) => {
+    const a = Math.max(0.5, Math.min(1, m) * (mid - 3));
+    og.fillRect(x, mid - a, 1, 2 * a);
+  });
+  const x0 = Math.max(0, t0 / dur * w), x1 = Math.min(w, t1 / dur * w);
+  og.fillStyle = "rgba(91,156,255,0.16)";
+  og.strokeStyle = "rgba(91,156,255,0.8)";
+  og.lineWidth = 1;
+  og.fillRect(x0, 0, Math.max(2, x1 - x0), h);
+  og.strokeRect(x0 + 0.5, 0.5, Math.max(2, x1 - x0) - 1, h - 1);
+  const px = Math.round(position() / dur * w) + 0.5;
+  og.strokeStyle = "#ff5a5a";
+  og.beginPath(); og.moveTo(px, 0); og.lineTo(px, h); og.stroke();
+}
+
+function overviewTo(e) {
+  const r = overview.getBoundingClientRect(), dur = audio.duration;
+  if (!dur) return;
+  const sec = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * dur;
+  state.follow = false;
+  state.view.start = sec - (canvas.clientWidth - GUTTER) / 2 / state.view.pxPerSec;
+  draw();
+}
+
+overview.addEventListener("pointerdown", (e) => {
+  overview.setPointerCapture(e.pointerId);
+  overviewTo(e);
+});
+overview.addEventListener("pointermove", (e) => { if (overview.hasPointerCapture(e.pointerId)) overviewTo(e); });
 
 // MARK: - Editing
 
@@ -639,6 +710,7 @@ function jumpUncertain(back = false) {
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   if (!state.song) return;
+  state.follow = false;
   if (e.ctrlKey || e.metaKey) {
     const { x } = pointer(e);
     const at = xToSec(x);
@@ -1154,12 +1226,24 @@ async function closeLevelsHint() {
   } catch (e) { status(e.message, true); }
 }
 
+let saving = false;
+
 async function save(as = false) {
   // Save writes into the open song folder. Save as copies the folder into another place
   // (into BeatTrain/Songs on an SD card), saves there and keeps editing the copy. A new
-  // song's first save asks for the place either way.
-  if (!state.song) return false;
+  // song's first save asks for the place either way. One save at a time: a second ⌘S
+  // while the folder dialog is open would save the draft twice.
+  if (!state.song || saving) return false;
   if (!state.song.editable) { status(state.song.reason, true); return false; }
+  saving = true;
+  try {
+    return await saveNow(as);
+  } finally {
+    saving = false;
+  }
+}
+
+async function saveNow(as) {
   const body = state.doc.saveBody();
   const draft = state.song.draft;
   if (draft || as) {
@@ -1180,11 +1264,11 @@ async function save(as = false) {
     if (draft || as) {
       state.song.draft = false;
       state.song.folder = data.folder;
-      state.app.settings = data.settings;
       status(draft ? `Saved the new song in ${data.folder}` : `Saved a copy in ${data.folder}; you're editing the copy now`);
     } else {
       status(`Saved ${data.file} in ${state.song.folder} (original kept as ${data.file}.orig)`);
     }
+    state.app.settings = data.settings;
     state.doc.markSaved();
     return true;
   } catch (e) { status(e.message, true); return false; }
@@ -1210,7 +1294,7 @@ async function pickPath(kind, start) {
 async function openMp3() {
   if (!okToLeave()) return;
   try {
-    const path = await pickPath("audio");
+    const path = await pickPath("audio", state.app.settings.audio_dir);
     if (!path) return;
     const job = await api("/api/convert", { audio: path });
     showJob(job);

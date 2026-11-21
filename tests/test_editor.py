@@ -90,7 +90,8 @@ def test_save_and_reduce_api(server):
     expert = [[t, "yellow-cym"] for t in range(0, 7680, 120)] + [[t, "red"] for t in range(480, 7680, 960)]
     levels = post(server + "/api/reduce", {"expert": expert})
     assert 0 < len(levels["easy"]) < len(levels["medium"]) <= len(levels["hard"]) < len(expert)
-    assert post(server + "/api/save", {"levels": {"expert": expert, **levels}})["file"] == "notes.mid"
+    saved = post(server + "/api/save", {"levels": {"expert": expert, **levels}})
+    assert saved["file"] == "notes.mid" and "out_dir" in saved["settings"]  # the UI keeps its settings
     song = json.loads(get(server + "/api/song")[1])
     assert len(song["levels"]["expert"]) == len(expert)
     with pytest.raises(urllib.error.HTTPError) as e:

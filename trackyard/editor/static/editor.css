@@ -23,7 +23,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-rows: auto auto auto auto 1fr auto;
+  grid-template-rows: auto auto auto auto 1fr auto auto;
 }
 
 header {
@@ -96,7 +96,8 @@ header { grid-row: 1; }
 #tune { grid-row: 3; }
 #transport { grid-row: 4; }
 main { grid-row: 5; position: relative; min-height: 0; }
-footer { grid-row: 6; }
+#overview { grid-row: 6; }
+footer { grid-row: 7; }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
 
 footer {
@@ -120,6 +121,17 @@ footer {
   accent-color: #9097a6;
   cursor: pointer;
 }
+.overview {
+  position: static;
+  display: block;
+  width: 100%;
+  height: 44px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+  touch-action: none;
+}
+.overview[hidden] { display: none; }
 .row-sounds { position: absolute; right: 0; top: 0; width: 0; height: 0; }
 .row-sound {
   position: absolute;
